@@ -347,11 +347,11 @@ w_rfs <- w_rfs %>%
 w_rfs$statute_rfs1 <- c(0, 0, 0, 0, 0, 0, 4, 4.7, 5.4, 6.1, 6.8, 7.4, 7.5, rep(NA, 10) ) 
 
 # convert mandates from billion gallons to tons maize 
-# According to USDA, 1 bushel maize gives 2.5 gallons ethanol https://www.fsa.usda.gov/Internet/FSA_File/2002factorsnformulas.pdf
+# According to USDA, 1 bushel maize gives 2.7 gallons ethanol https://www.ers.usda.gov/about-ers/partnerships/strengthening-statistics-through-the-icars/biofuels-data-sources/
 # Given that 1 bushel maize is 0.0254 metric ton maize https://www.sagis.org.za/conversion_table.html
-# 1 gallon ethanol = (1/2.5) * 0.0254 metric ton
-# 1bgal = (1/2.5) * 0.0254 billion metric tons = (1/2.5) * 0.0254 * 1000 million metric tons
-w_rfs <- dplyr::mutate(w_rfs, across(.cols = contains("_conv") | contains("_rfs1"), .fns = ~.*(1/2.5) * 0.0254 * 1000) )
+# 1 gallon ethanol = (1/2.7) * 0.0254 metric ton
+# 1bgal = (1/2.7) * 0.0254 billion metric tons = (1/2.7) * 0.0254 * 1000 million metric tons
+w_rfs <- dplyr::mutate(w_rfs, across(.cols = contains("_conv") | contains("_rfs1"), .fns = ~.*(1/2.7) * 0.0254 * 1000) )
 
 # pile up 
 l_rfs <- pivot_longer(w_rfs, cols = c("statute_conv", "final_conv", "statute_rfs1"), names_to = "mandates", values_to = "maize_milton") %>% as.data.frame() %>% arrange(mandates)
@@ -362,19 +362,19 @@ ggplot(l_rfs, aes(x = year, y = maize_milton, group = mandates)) +
   geom_line(aes(x = year, y = us_dc_maize)) +
   geom_label(aes(label="US domestic consumption", 
                  x=2019,
-                 y=300)) +
+                 y=290)) +
   
   geom_label(aes(label="RFS2 (statutory)", 
                  x=2020,
-                 y=160)) +
+                 y=150)) +
   
   geom_label(aes(label="RFS2 (final rule)", 
                  x=2016,
-                 y=127)) +
+                 y=120)) +
   
   geom_label(aes(label="RFS1 (statutory)", 
                  x=2014,
-                 y=75)) +
+                 y=70)) +
   scale_linetype_manual(breaks=c("statute_conv", "final_conv", "statute_rfs1"),
                         values=c("solid", "dotted", "twodash"),
                         labels=c("RFS2 (statutory)", "RFS2 (final)", "RFS1 (statutory)"),
@@ -401,8 +401,178 @@ ggplot(l_rfs, aes(x = year, y = maize_milton, group = mandates)) +
 
 
 #### MAP EXPOSURES -------------------------------------------------------------------------------------------------- 
-# A recopier dans prepare_exposures
 
+sffb <- st_read(here("input_data", "Global_LSIB_Polygons_Detailed"))
+
+# necessary for simplifying below, and better for unioning 
+sffb <- st_transform(sffb, crs = 4088)
+
+names(sffb)[names(sffb) == "COUNTRY_NA"] <- "country"
+# sffb[grepl("ongo", sffb$country), ]
+# pfb[grepl("ongo", pfb$country), "country"]
+
+### Match country names to those from FAOSTAT 
+## /!\ NEXT TIME CONSIDER USING A FAOSTAT ADMIN BOUNDARIES MAP DIRECTLY ! 
+# (but some advantages to adjust manually some things here)
+
+# Note that some FAOSTAT names have been modified above already (they are on top here)
+# Note also that we do not associate islands to their main country, for simplicity (by commenting their section out)
+sffb$country[sffb$country=="Cote d'Ivoire"] <- "Ivory Coast" # NOTICE THIS (FAOSTAT name is Côte d'Ivoire)
+sffb$country[sffb$country=="Congo, Rep of the"] <- "Republic of the Congo" # This name is not from FAOSTAT, I changed it above
+
+# Political discrepancies
+sffb$country[sffb$country=="China"] <- "China, mainland" # NOTICE THIS 
+sffb$country[sffb$country=="Hong Kong (Ch)"] <- "China, Hong Kong SAR"
+sffb$country[sffb$country=="Macau (Ch)"] <- "China, Macao SAR"
+# sffb$country[sffb$country=="Taiwan"] 
+
+# for Sudan and South Sudan, they will have exactly the same treatment. So we can treat them as within the same cluster, 
+# or merge them into a single country, with average outcome. 
+sffb[sffb$country=="Sudan", "geometry"] <- st_union(sffb[sffb$country == "Sudan", "geometry"], 
+                                                    sffb[sffb$count == "South Sudan", "geometry"]) # %>% dplyr::select(geometry)
+sffb$country[sffb$country=="Sudan"] <- "Sudan (former)" # South Sudan independent since 2005, after our data period
+
+sffb[sffb$country=="Serbia", "geometry"] <- st_union(sffb[sffb$country == "Serbia", "geometry"], 
+                                                     sffb[sffb$country == "Montenegro", "geometry"]) # %>% dplyr::select(geometry)
+sffb$country[sffb$country=="Serbia"] <- "Serbia and Montenegro" # Montenegro independent since 2006, after our data period
+
+# Countries for which it's simply a matter of different way to write the name down
+sffb$country[sffb$country=="Congo, Dem Rep of the"] <- "Democratic Republic of the Congo"
+sffb$country[sffb$country=="Macedonia"] <- "North Macedonia"
+sffb$country[sffb$country=="United Kingdom"] <- "United Kingdom of Great Britain and Northern Ireland"
+sffb$country[sffb$country=="United States"] <- "United States of America"
+sffb$country[sffb$country=="Russia"] <- "Russian Federation"
+sffb$country[sffb$country=="Syria"] <- "Syrian Arab Republic"
+sffb$country[sffb$country=="Bosnia & Herzegovina"] <- "Bosnia and Herzegovina"
+sffb$country[sffb$country=="Korea, North"] <- "Democratic People's Republic of Korea"
+sffb$country[sffb$country=="Korea, South"] <- "Republic of Korea"
+sffb$country[sffb$country=="Moldova"] <- "Republic of Moldova"
+sffb$country[sffb$country=="Gambia, The"] <- "Gambia"
+sffb$country[sffb$country=="Swaziland"] <- "Eswatini"
+sffb$country[sffb$country=="Iran"] <- "Iran (Islamic Republic of)"
+sffb$country[sffb$country=="Burma"] <- "Myanmar"
+sffb$country[sffb$country=="Bahamas, The"] <- "Bahamas"
+sffb$country[sffb$country=="Vietnam"] <- "Viet Nam"
+sffb$country[sffb$country=="Laos"] <- "Lao People's Democratic Republic"
+sffb$country[sffb$country=="Antigua & Barbuda"] <- "Antigua and Barbuda"
+sffb$country[sffb$country=="St Kitts & Nevis"] <- "Saint Kitts and Nevis"
+sffb$country[sffb$country=="St Lucia"] <- "Saint Lucia"
+sffb$country[sffb$country=="St Vincent & the Grenadines"] <- "Saint Vincent and the Grenadines"
+sffb$country[sffb$country=="Venezuela"] <- "Venezuela (Bolivarian Republic of)"
+sffb$country[sffb$country=="Trinidad & Tobago"] <- "Trinidad and Tobago"
+sffb$country[sffb$country=="Central African Rep"] <- "Central African Republic"
+sffb$country[sffb$country=="Brunei"] <- "Brunei Darussalam"
+sffb$country[sffb$country=="Sao Tome & Principe"] <- "Sao Tome and Principe"
+sffb$country[sffb$country=="Tanzania"] <- "United Republic of Tanzania"
+sffb$country[sffb$country=="Solomon Is"] <- "Solomon Islands"
+sffb$country[sffb$country=="Bolivia"] <- "Bolivia (Plurinational State of)"
+
+
+# simplify before plotting
+sffb$geometry <- st_simplify(sffb$geometry, dTolerance = 1500)
+
+sffb <- st_transform(sffb, crs = 4326)
+
+# add 2010-2019 exposures
+postdep <- readRDS(here("temp_data", "exposures_20102019", "dependency_20102019.Rdata"))
+postdep <- dplyr::select(postdep, country, dependency_calorie_total)
+names(postdep) <- c("country", "dependency_calorie_total_20102019")
+
+prepostdep <- left_join(exposures_list[["2001_2007"]], postdep, by = "country")
+
+csfb_sf <- left_join(prepostdep, sffb, by = "country") %>% st_as_sf()
+
+# if st_simplify is too "strong", geometries become "empty" 
+csfb_sf$country[st_is_empty(csfb_sf$geometry)]
+
+
+
+##### Calorific import dependency ####
+pal_dep <- colorNumeric("viridis", # "viridis" (green-purple), "magma" (yellow-purple), "inferno" (like magma), or "plasma", "BuPu", "Greens"
+                        domain = st_drop_geometry(csfb_sf[,"dependency_calorie_total"]),
+                        #bins = 4, 
+                        na.color = "transparent", 
+                        reverse = F)
+
+
+# popup
+csfb_sf$popup_total <- paste0("<b>",csfb_sf$country,"</b>", "<br/>",
+                              "2001-2007 annual averages:", "<br/>",
+                              " &nbsp;&nbsp;&nbsp;&nbsp; Calorific import dependency: ", formatC(csfb_sf$dependency_calorie_total, format = "f", digits = 2), "<br/>", 
+                              " &nbsp;&nbsp;&nbsp;&nbsp; Imports: ", formatC(csfb_sf$import_kcal_total/1e6, format = "e", digits = 2), " bn cal", "<br/>",
+                              " &nbsp;&nbsp;&nbsp;&nbsp; Supply + Exports: ", formatC(csfb_sf$gross_supply_kcal_total/1e6,format = "e", digits = 2), " bn cal", "<br/>", 
+                              "<br/>", 
+                              "2010-2019 calorific import dependency: ", formatC(csfb_sf$dependency_calorie_total_20102019, format = "f", digits = 2)
+)
+
+
+
+leaflet() %>% 
+  addTiles()%>%
+  addProviderTiles(providers$Esri.WorldGrayCanvas, group ="ESRI") %>%
+  setView(lat = 0, 
+          lng = 0, 
+          zoom = 1) %>% 
+  addPolygons(data = csfb_sf, 
+              opacity = 0, color = "black", weight = 2, 
+              fill = TRUE, fillColor = ~pal_dep(csfb_sf$dependency_calorie_total), fillOpacity = 0.5,
+              popup = ~csfb_sf$popup_total, 
+              popupOptions = popupOptions(riseOnHover = TRUE, 
+                                          bringToFront = TRUE),
+              highlightOptions = highlightOptions(bringToFront = TRUE)
+  ) %>% 
+  # addMarkers(data = csfb_sf, 
+  #            popup = ~csfb_sf$popup_total,
+  #            options = markerOptions(riseOnHover = TRUE)) %>% 
+  addLegend(pal = pal_dep,  
+            values = csfb_sf$dependency_calorie_total, 
+            bins = 5, opacity = 0.4,
+            title = "Calorific import dependency",
+            position = "bottomright") 
+
+#### Inverse GDP weighted calorific import dependency ####
+
+pal_dep <- colorNumeric("viridis", # "viridis" (green-purple), "magma" (yellow-purple), "inferno" (like magma), or "plasma", "BuPu", "Greens"
+                        domain = st_drop_geometry(csfb_sf[,"gdp_dependency_calorie_total"]),
+                        #bins = 4, 
+                        na.color = "transparent", 
+                        reverse = F)
+
+
+# popup
+csfb_sf$popup_total <- paste0("<b>",csfb_sf$country,"</b>", "<br/>",
+                              "2001-2007 annual averages:", "<br/>",
+                              " &nbsp;&nbsp;&nbsp;&nbsp; Calorific import dependency weighted by inverse GDP per capita: ", formatC(csfb_sf$gdp_dependency_calorie_total, format = "f", digits = 2), "<br/>", 
+                              " &nbsp;&nbsp;&nbsp;&nbsp; Imports: ", formatC(csfb_sf$import_kcal_total/1e6, format = "e", digits = 2), " bn cal", "<br/>",
+                              " &nbsp;&nbsp;&nbsp;&nbsp; Supply + Exports: ", formatC(csfb_sf$gross_supply_kcal_total/1e6,format = "e", digits = 2), " bn cal", "<br/>", 
+                              "<br/>", 
+                              "2010-2019 calorific import dependency: ", formatC(csfb_sf$dependency_calorie_total_20102019, format = "f", digits = 2)
+)
+
+
+
+leaflet() %>% 
+  addTiles()%>%
+  addProviderTiles(providers$Esri.WorldGrayCanvas, group ="ESRI") %>%
+  setView(lat = 0, 
+          lng = 0, 
+          zoom = 1) %>% 
+  addPolygons(data = csfb_sf, 
+              opacity = 0, color = "black", weight = 2, 
+              fill = TRUE, fillColor = ~pal_dep(csfb_sf$gdp_dependency_calorie_total), fillOpacity = 0.5,
+              popup = ~csfb_sf$popup_total, 
+              popupOptions = popupOptions(riseOnHover = TRUE, 
+                                          bringToFront = TRUE),
+              highlightOptions = highlightOptions(bringToFront = TRUE)
+  ) %>% 
+  # addMarkers(data = csfb_sf, 
+  #            popup = ~csfb_sf$popup_total,
+  #            options = markerOptions(riseOnHover = TRUE)) %>% 
+  addLegend(pal = pal_dep,  
+            values = csfb_sf$gdp_dependency_calorie_total, 
+            bins = 5, opacity = 0.4,
+            title = "Calorific import dependency <br/> weighted by inverse GDP per capita",
+            position = "bottomright") 
 
 #### REGRESSION FUNCTION --------------------------------------------------------------------------------------------------
 
@@ -410,17 +580,20 @@ ggplot(l_rfs, aes(x = year, y = maize_milton, group = mandates)) +
 outcome_variable = "undernourished_kcapita" #   # c("foodinsecu_modsevere_kcapita", "foodinsecu_severe_kcapita", "undernourished_kcapita", "stunting_kcapita", "wasting_kcapita")
 offset = "population_kcapita"
 weights = FALSE
+include_preperiod = FALSE
+
+# exposure 
+pretreat_period = "2001_2007" # names(exposures_list)
+calorie_only = TRUE
 commodities = "total"
+gdp_weighting = TRUE
 # exposure_rfs = exposures_names_list[c("total", "cereals", "oilcrops", "vegetable_oils")] %>% unlist() %>% unname()
 remove_wellnourished = TRUE
 original_rfs_treatments = c("statute_conv")
 start_year = 2009 
 end_year = 2020 
-include_preperiod = TRUE
 
-# exposure 
-pretreat_period = "2001_2007" # names(exposures_list)
-calorie_only = TRUE
+
 
 # dynamics 
 rfs_lead = 3
@@ -432,8 +605,8 @@ aggr_dyn = TRUE
 
 # heterogeneity control
 control_remaining_dependency = TRUE
-s_trend = TRUE
-s_trend_loga = TRUE
+s_trend = FALSE
+s_trend_loga = FALSE
 fe = "country + year" #  
 
 # estimation 
@@ -455,22 +628,26 @@ rm(d, d_clean, outcome_variable, offset, weights, commodities, original_rfs_trea
    distribution, invhypsin, preclean_level, clustering, cluster_var1, cluster_var2, glm_iter,
    output)
 
-make_main_reg <- function(# scope 
+make_main_reg <- function(# outcome 
                           outcome_variable = "undernourished_kcapita",
                           offset = "population_kcapita", # should the log of the annual ("population_kcapita") or of the pre-period ("population_kcapita_2007") population size be added as an offset (i.e. linearly to the fml element of fixest)? Any positive constant number yields no offset
+                          # sample
                           weights = FALSE, # should population weights be used in the regression
-                          commodities = "total", # one or several elements of names(exposures_names_list). May not be available for a given outcome, depending on exposure_outcome_map. If "" or NULL, all regressions allowed by exposure_outcome_map are run
-                          # nutrient = "calorie", currently not used, because either all nutrients are included, or only calorie, or it's exposure is not in nutrient terms. # one of "calorie", "protein", or "fat". This is used only when studying childhood malnutrition or nutrient supply
-                          original_rfs_treatments = c("statute_conv"),
-                          start_year = 2009, 
-                          end_year = 2020, 
                           include_preperiod = TRUE, # whether to include years 2000-2004 as a pre-treatment period where the outcomes are unaffected by any RFS mandate
                           remove_wellnourished = TRUE, # removes countries which undernourishment prevalence is "<2.5%" every year of the study period (according to FAOSTAT)
                           
-                          # exposure 
+                          # exposure
+                          commodities = "total", # one or several elements of names(exposures_names_list). May not be available for a given outcome, depending on exposure_outcome_map. If "" or NULL, all regressions allowed by exposure_outcome_map are run
+                          gdp_weighting = TRUE,
                           pretreat_period = "2001_2007", # one of names(exposures_list)
                           calorie_only = TRUE, # this should be left TRUE if outcome is undernourished. Set to FALSE to estimate conditional effects through
-                                               # all nutrient-specific exposures (calorie, protein and fat). Inconsequential if outcome is foodinsecu_*
+                          # all nutrient-specific exposures (calorie, protein and fat). Inconsequential if outcome is foodinsecu_*
+                          # nutrient = "calorie", currently not used, because either all nutrients are included, or only calorie, or it's exposure is not in nutrient terms. # one of "calorie", "protein", or "fat". This is used only when studying childhood malnutrition or nutrient supply
+                          
+                          # shocks
+                          original_rfs_treatments = c("statute_conv"),
+                          start_year = 2009, 
+                          end_year = 2020, 
                           
                           # dynamics 
                           rfs_lead = 0,
@@ -610,10 +787,18 @@ make_main_reg <- function(# scope
     exposures_sets <- lapply(exposures_sets, FUN = identity) 
   }
   
+  # and edit import dependency names to their GDP weighted versions, if required
+  if(gdp_weighting){
+    exposures_sets <- lapply(exposures_sets, FUN = function(x){paste0("gdp_",x)} )
+  }  
   
   ### Regressors ####
+  
+
+  
   # the set of all exposure variables that will be leveraged for the regressions of the chosen outcome
   potential_exp <- exposures_sets %>% unlist() %>% unname() # unlist necessary for foodinsecu_ exposures, but inconsequentiel for other outcomes (already unlisted)
+
   
   # DATA: construct the interactions with all these potential exposures, 
   # they will all be needed by at least one regression ordered for the present outcome
@@ -1011,12 +1196,12 @@ etable(est_obj_list,
 
 
 #### COUNTERFACTUAL MAGNITUDE SIMULATIONS -----------------------------------------------------------
-#### Counterfactual magnitudes ####
 
 # implied by coefficient, for undernourishment outcome and total commodity dependency 
 # The aim is to estimate the annually averaged count of undernourished people avoided globally
 magnitudes_list <- list()
 MDL <- 1
+set.seed(8888)
 for(EST_DATA_OBJ in est_data_obj_list){
   
   EST_OBJ <- EST_DATA_OBJ[[1]]
@@ -1177,6 +1362,9 @@ print("The # of undernourished people that could have been avoided annually, ove
 
 
 magnitudes_list[[1]]
+
+saveRDS(magnitudes_list, here("temp_data", "reg_results", "magnitudes_list.Rdata"))
+
 
 
 

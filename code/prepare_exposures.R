@@ -365,7 +365,7 @@ for(year in pretreatment_years){
   
   # take only Serbia, after it splitted with Montenegro, and call it as it was prior splitting
   # grep(pattern = "erbia", x = unique(wide_fb$country), value = TRUE) 
-  wide_fb$country[wide_fb$country=="Serbia"] <- "Serbia and Montenegro" # Montenegro independent since 2006, after our data period
+  wide_fb$country[wide_fb$country=="Serbia"] <- "Serbia and Montenegro" # Montenegro independent since 2006, (almost only) after our data period
   wide_fb <- dplyr::filter(wide_fb, country != "Montenegro")
   # The problem does not occur for sudan and south sudan, as the  distinction is not made in the data untile 2009 at least. 
   # thus, only Sudan (former) appears here, and need not be adjusted. 
@@ -658,6 +658,112 @@ pfbsave <- pfb
 
 
 
+#### PREPARE GDP / CAPITA --------------------------------------------------------------------------------------------
+gdp <- read.csv(here("input_data", "exposure_variables", "API_NY.GDP.PCAP.KD_DS2_en_csv_v2_4330936", "API_NY.GDP.PCAP.KD_DS2_en_csv_v2_4330936.csv"), 
+                skip = 4)
+
+head(gdp) # it's in wide shape
+names(gdp)[names(gdp)=="Country.Name"] <- "country"
+names(gdp)[names(gdp)=="Country.Code"] <- "country_code"
+names(gdp)[names(gdp)=="Indicator.Name"] <- "gdp_pc_cstusd"
+gdp <- dplyr::select(gdp, -Indicator.Code)
+summary(gdp$X)
+gdp <- dplyr::select(gdp, -X)
+names(gdp) <- gsub("X", "gdp_pc_cstusd.", names(gdp)) 
+varying_vars <- grep(pattern = "gdp_pc_cstusd.", x = names(gdp), value = TRUE, ignore.case = FALSE)
+
+# no duplicated countries
+gdp[duplicated(gdp$country),]
+
+gdp_wide <- gdp
+gdp <- stats::reshape(gdp_wide,
+                      varying = varying_vars,
+                      # v.names = c("Value"),
+                      sep = ".",
+                      timevar = "year",
+                      idvar = "country", 
+                      direction = "long",
+                      new.row.names = NULL)  
+
+# we need only exposures from 2001. 
+gdp <- dplyr::filter(gdp, year %in% c(pretreatment_years, 2010, 2011)) # leave 2010 and 2011 for RDC etc. others will be remove when left joining
+
+# Repair country names in order to match 
+gdp_c <- unique(gdp$country)
+target_c <- unique(pfb$country)
+
+target_c[!(target_c %in% gdp_c)]
+gdp_c[!(gdp_c %in% target_c)]
+grep("Ta", gdp_c, value = TRUE)
+
+gdp$country[gdp$country == "Türkiye"] <- "Turkey"
+gdp$country[gdp$country == "Turkiye"] <- "Turkey"
+gdp$country[gdp$country == "TÃ¼rkiye"] <- "Turkey"
+gdp$country[gdp$country == "T?rkiye"] <- "Turkey"
+
+gdp$country[gdp$country == "Côte d'Ivoire"] <- "Ivory Coast"
+gdp$country[gdp$country == "Cote d'Ivoire"] <- "Ivory Coast"
+gdp$country[gdp$country == "CÃ´te d'Ivoire"] <- "Ivory Coast"
+gdp$country[gdp$country == "C?te d'Ivoire"] <- "Ivory Coast"
+
+gdp$country[gdp$country == "Congo, Dem. Rep."] <- "Democratic Republic of the Congo"
+gdp$country[gdp$country == "Bahamas, The"] <- "Bahamas"
+gdp$country[gdp$country == "Bolivia"] <- "Bolivia (Plurinational State of)"
+gdp$country[gdp$country == "China"] <- "China, mainland"
+gdp$country[gdp$country == "Czech Republic"] <- "Czechia"
+gdp$country[gdp$country == "Congo, Rep."] <- "Republic of the Congo"
+gdp$country[gdp$country == "Korea, Dem. People's Rep."] <- "Democratic People's Republic of Korea"
+gdp$country[gdp$country == "Egypt, Arab Rep."] <- "Egypt"
+gdp$country[gdp$country == "Gambia, The"] <- "Gambia"
+gdp$country[gdp$country == "Iran, Islamic Rep."] <- "Iran (Islamic Republic of)"
+gdp$country[gdp$country == "Kyrgyz Republic"] <- "Kyrgyzstan"
+gdp$country[gdp$country == "Lao PDR"] <- "Lao People's Democratic Republic"
+gdp$country[gdp$country == "Korea, Rep."] <- "Republic of Korea"
+gdp$country[gdp$country == "Moldova"] <- "Republic of Moldova"
+gdp$country[gdp$country == "St. Kitts and Nevis"] <- "Saint Kitts and Nevis"
+gdp$country[gdp$country == "St. Lucia"] <- "Saint Lucia"
+gdp$country[gdp$country == "St. Vincent and the Grenadines"] <- "Saint Vincent and the Grenadines"
+gdp$country[gdp$country == "Slovak Republic"] <- "Slovakia"
+gdp$country[gdp$country == "United Kingdom"] <- "United Kingdom of Great Britain and Northern Ireland"
+gdp$country[gdp$country == "Tanzania"] <- "United Republic of Tanzania"
+gdp$country[gdp$country == "United States"] <- "United States of America"
+gdp$country[gdp$country == "Venezuela, RB"] <- "Venezuela (Bolivarian Republic of)"
+gdp$country[gdp$country == "Vietnam"] <- "Viet Nam"
+gdp$country[gdp$country == "Yemen, Rep."] <- "Yemen"
+
+# Aggregate Serbia and Montenegro, and remove South Sudan (which has only NA in 2001-2007)
+gdp <- dplyr::filter(gdp, country != "South Sudan")
+gdp$country[gdp$country == "Sudan"] <- "Sudan (former)"
+
+sm <- gdp[gdp$country%in%c("Serbia", "Montenegro"),] %>% arrange(country)
+sm 
+
+sm <- dplyr::mutate(sm, 
+                    w_gdp_pc_cstusd = if_else(country=="Montenegro", 
+                                               true = gdp_pc_cstusd*0.1, 
+                                               false = gdp_pc_cstusd*0.9))
+# there is no NA
+sm <- ddply(.data = sm, .variables = "year", summarise, 
+            gdp_pc_cstusd = sum(w_gdp_pc_cstusd))
+
+sm$country <- "Serbia and Montenegro" # rbind "matches columns by name (rather than by position)." so it does not matter that country is not at the same position
+sm$country_code <- "SRB"
+gdp <- rbind(gdp, sm) 
+gdp <- dplyr::filter(gdp, country != "Serbia" & country != "Montenegro")
+
+gdp_c <- unique(gdp$country)
+target_c <- unique(pfb$country)
+target_c[!(target_c %in% gdp_c)] # there is no taiwan. Otherwise, all countries from target data (pfb) have now a match in world bank gdp data. 
+
+row.names(gdp) <- NULL
+pfb <- left_join(pfb, gdp, by = c("country", "year"))
+
+summary(pfb$gdp_pc_cstusd)
+
+pfb[is.na(pfb$gdp_pc_cstusd), c("country", "year")]
+# Missing data for Afghanistan in 2001, North Korea, Djibouti, and Venezuela
+
+
 #### MAKE STATISTICS OF INTEREST ---------------------------------------------------------------------------------
 
 ### Convert imports, exports, and domestic supply into their nutrient contents (they are in 1000 tonnes and we first convert them to kg, to match conversion factors)
@@ -732,6 +838,8 @@ for(item in all_items[selected_items]){
 pretreat_year_sets <- list(`2001_2007` = c(2001:2007), 
                             `2004_2007` = c(2004:2007),
                             `2006_2007` = c(2006:2007))
+# dependency variables 
+all_dep_vars <- grep("dependency_", names(pfb), value = TRUE)
 
 csfb <- list()
 for(pretreat_period in pretreat_year_sets){
@@ -739,6 +847,9 @@ for(pretreat_period in pretreat_year_sets){
   csfb <- ddply(pfb[pfb$year %in% c(pretreat_period, 2010, 2011), ], # the 2010-2011 part is to include countries missing in old FAO data
                                     "country", summarise, 
                     
+                                  # GDP per capita in 2015 constant USD 
+                                  gdp_pc_cstusd = mean(gdp_pc_cstusd, na.rm = TRUE),
+                
                                   # Main dependency variables: 
                                   dependency_calorie_total = mean(dependency_calorie_total, na.rm = TRUE), 
                                   dependency_protein_total = mean(dependency_protein_total, na.rm = TRUE), 
@@ -855,6 +966,9 @@ for(pretreat_period in pretreat_year_sets){
                                   !!as.symbol("gprot_per_kg_meat") := mean(!!as.symbol("gprot_per_kg_meat"), na.rm = TRUE), 
                                   !!as.symbol("gprot_per_kg_fish") := mean(!!as.symbol("gprot_per_kg_fish"), na.rm = TRUE) 
                                 )
+  # For all dependency variables, make an inverse gdp per capita weighted version 
+  # express GDP per capita in 1000 USD, to make resulting quantities less small 
+  csfb <- dplyr::mutate(csfb, across(.cols = any_of(all_dep_vars), .fns = ~.*1000/gdp_pc_cstusd, .names = paste0("gdp_","{col}")))
   
   saveRDS(csfb, file = here("temp_data", "exposures", paste0("dependency_",
                                                               min(pretreat_period),
@@ -869,10 +983,8 @@ rm(fb, pfb, pfbsave, rdc, prdc, wide_fb, wide_fb_list, wide_rdc, wide_rdc_list, 
 
 
 
-
-
 #### Data exploration  -----------------------------------------------------------------------------------------------
-
+# Don't erase this part, it is not as complete in / it's different in anaylses_rfsFOOD.R
 sffb <- st_read(here("input_data", "Global_LSIB_Polygons_Detailed"))
 
 # necessary for simplifying below, and better for unioning 
