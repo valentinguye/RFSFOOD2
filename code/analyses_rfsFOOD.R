@@ -290,7 +290,9 @@ ggplot(prepostdep, aes(x = `Pre-treatment period exposure`, y = `Actual study pe
   geom_label( 
     data=prepostdep %>% filter(`Actual study period exposure` > 1), # Filter data first
     aes(label=country), nudge_y = 0.1
-  )
+  ) + 
+  theme_minimal() 
+  
 # aes(color = factor(gear))
 
 
@@ -382,13 +384,13 @@ ggplot(l_rfs, aes(x = year, y = maize_milton, group = mandates)) +
   
   annotate("rect", xmin = 2005, xmax = 2008, ymin = 0, ymax = 150, 
            alpha = .2, col = "lightgrey") + 
-  geom_label(aes(label="Excluded variation", 
+  geom_label(aes(label="Possibly endogenous mandates", 
                  x=2006.5,
                  y=160)) +
 
   scale_x_continuous(breaks = c(2000, 2005, 2006, 2008, 2012, 2015, 2022)) +
   scale_y_continuous(name = "Million tonnes maize") + 
-
+  theme_minimal() +
   theme(legend.position="none", 
         plot.title = element_text(size = 10, face = "bold"), 
         axis.title.y.left=element_text(size=10,face="bold", hjust = 1),
@@ -580,13 +582,13 @@ leaflet() %>%
 outcome_variable = "undernourished_kcapita" #   # c("foodinsecu_modsevere_kcapita", "foodinsecu_severe_kcapita", "undernourished_kcapita", "stunting_kcapita", "wasting_kcapita")
 offset = "population_kcapita"
 weights = FALSE
-include_preperiod = FALSE
+include_preperiod = TRUE
 
 # exposure 
 pretreat_period = "2001_2007" # names(exposures_list)
 calorie_only = TRUE
 commodities = "total"
-gdp_weighting = TRUE
+gdp_weighting = FALSE
 # exposure_rfs = exposures_names_list[c("total", "cereals", "oilcrops", "vegetable_oils")] %>% unlist() %>% unname()
 remove_wellnourished = TRUE
 original_rfs_treatments = c("statute_conv")
@@ -597,7 +599,7 @@ end_year = 2020
 
 # dynamics 
 rfs_lead = 3
-rfs_lag = 3
+rfs_lag = 4
 rfs_fya = 0
 rm(rfs_pya) # needs to be reinitialized every time
 lag_controls = NULL
@@ -605,7 +607,9 @@ aggr_dyn = TRUE
 
 # heterogeneity control
 control_remaining_dependency = TRUE
-s_trend = FALSE
+s_trend = TRUE
+s_trend_sqrt = TRUE
+s_trend_sq = FALSE
 s_trend_loga = FALSE
 fe = "country + year" #  
 
@@ -637,8 +641,8 @@ make_main_reg <- function(# outcome
                           remove_wellnourished = TRUE, # removes countries which undernourishment prevalence is "<2.5%" every year of the study period (according to FAOSTAT)
                           
                           # exposure
-                          commodities = "total", # one or several elements of names(exposures_names_list). May not be available for a given outcome, depending on exposure_outcome_map. If "" or NULL, all regressions allowed by exposure_outcome_map are run
-                          gdp_weighting = TRUE,
+                          commodities = "total", # if TRUE, then all prepared regression sets are run for the chosen outcome. Otherwise, commodities should be a character vector containing one or several elements of names(exposures_names_list). May not be available for a given outcome, depending on exposure_outcome_map. If "" or NULL, all regressions allowed by exposure_outcome_map are run
+                          gdp_weighting = FALSE,
                           pretreat_period = "2001_2007", # one of names(exposures_list)
                           calorie_only = TRUE, # this should be left TRUE if outcome is undernourished. Set to FALSE to estimate conditional effects through
                           # all nutrient-specific exposures (calorie, protein and fat). Inconsequential if outcome is foodinsecu_*
@@ -660,6 +664,8 @@ make_main_reg <- function(# outcome
                           # heterogeneity control
                           control_remaining_dependency = TRUE,  
                           s_trend = FALSE,
+                          s_trend_sqrt = FALSE,
+                          s_trend_sq = FALSE,
                           s_trend_loga = FALSE,
                           fe = "country + year", 
                           
@@ -767,12 +773,14 @@ make_main_reg <- function(# outcome
     d$constant_offset <- 1
   }
   
+
   # We don't want calorie exposures if we investigate food insecurity, and total is not available
   if(grepl("foodinsecu_", outcome_variable)){
     calorie_only <- FALSE
     if(commodities == "total"){commodities <- TRUE}
   }
   
+
   # This is the set of exposures for every regression ordered for the present outcome (written flexibly to accomodate different outcome forms)
   # There is one regression to run per element of exposure_outcome_map[[outcome_variable]]
   # each regression features all the exposures contained in the element 
@@ -793,9 +801,7 @@ make_main_reg <- function(# outcome
   }  
   
   ### Regressors ####
-  
 
-  
   # the set of all exposure variables that will be leveraged for the regressions of the chosen outcome
   potential_exp <- exposures_sets %>% unlist() %>% unname() # unlist necessary for foodinsecu_ exposures, but inconsequentiel for other outcomes (already unlisted)
 
@@ -859,9 +865,16 @@ make_main_reg <- function(# outcome
           for(rfs_var in rfs_treatments){
             remctrl_name <- paste0("remdep_",nutr,"_",exp_set_name,"_X_", rfs_var)
             exp_set_controls <- c(exp_set_controls, remctrl_name)
-            d <- dplyr::mutate(d, !!as.symbol(remctrl_name) := ( !!as.symbol(paste0("dependency_",nutr,"_total")) - 
-                                                                 !!as.symbol(paste0("dependency_",nutr,"_",exp_set_name)) ) *
-                                                               !!as.symbol(rfs_var))
+            if(gdp_weighting){
+              d <- dplyr::mutate(d, !!as.symbol(remctrl_name) := ( !!as.symbol(paste0("gdp_dependency_",nutr,"_total")) - 
+                                                                   !!as.symbol(paste0("gdp_dependency_",nutr,"_",exp_set_name)) ) *
+                                                                   !!as.symbol(rfs_var))
+            } else{
+               d <- dplyr::mutate(d, !!as.symbol(remctrl_name) := ( !!as.symbol(paste0("dependency_",nutr,"_total")) - 
+                                                                    !!as.symbol(paste0("dependency_",nutr,"_",exp_set_name)) ) *
+                                                                    !!as.symbol(rfs_var))
+            }
+           
           }
         }
         
@@ -887,11 +900,56 @@ make_main_reg <- function(# outcome
   ### Trends & FE #### 
   for(exp_set_name in names(exposures_sets)){
     
-    log_trends <- c() # it's important that this is renewed for every regression (exposures_sets loop)
+    # it's important that this is renewed for every regression (exposures_sets loop)
     lin_trends <- c()
+    sqrt_trends <- c()
+    sq_trends <- c()
+    log_trends <- c() 
+
     
     # single set of exposures 
     exp_set <- exposures_sets[[exp_set_name]]
+    
+    if(s_trend){
+      for(exp_ in exp_set){
+        trendname <- paste0(exp_, "_trend_lin")
+        lin_trends <- c(lin_trends, trendname)
+        
+        d <- mutate(d, !!as.symbol(trendname) := !!as.symbol(exp_) * (year)) 
+      }  
+      fml_lintrends_part <- paste0(lin_trends, collapse = " + ")
+      # add them to the regressors part of the formula, within each regression set 
+      regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_lintrends_part)
+    }
+    
+    
+    if(s_trend_sqrt){
+      for(exp_ in exp_set){
+        trendname <- paste0(exp_, "_trend_sqrt")
+        sqrt_trends <- c(sqrt_trends, trendname)
+        
+        # make the logged value start from 1 for the first year in the data - which is not the same depending on whether we include the pre-treatment period
+        d <- mutate(d, !!as.symbol(trendname) := !!as.symbol(exp_) * sqrt((year - min(year))))
+          
+      }  
+      fml_sqrttrends_part <- paste0(sqrt_trends, collapse = " + ")
+      # add them to the regressors part of the formula, within each regression set 
+      regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_sqrttrends_part)
+    }
+    
+    if(s_trend_sq){
+      for(exp_ in exp_set){
+        trendname <- paste0(exp_, "_trend_sq")
+        sq_trends <- c(sq_trends, trendname)
+        
+        # make the logged value start from 1 for the first year in the data - which is not the same depending on whether we include the pre-treatment period
+        d <- mutate(d, !!as.symbol(trendname) := !!as.symbol(exp_) * ((year - min(year))^2))
+        
+      }  
+      fml_sqtrends_part <- paste0(sq_trends, collapse = " + ")
+      # add them to the regressors part of the formula, within each regression set 
+      regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_sqtrends_part)
+    }
     
     if(s_trend_loga){
       for(exp_ in exp_set){
@@ -900,26 +958,14 @@ make_main_reg <- function(# outcome
         
         # make the logged value start from 1 for the first year in the data - which is not the same depending on whether we include the pre-treatment period
         d <- mutate(d, !!as.symbol(trendname) := !!as.symbol(exp_) * log((year - min(year) + 1)))
-          
+        
       }  
       fml_logtrends_part <- paste0(log_trends, collapse = " + ")
       # add them to the regressors part of the formula, within each regression set 
       regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_logtrends_part)
     }
-    
-    if(s_trend){
-      for(exp_ in exp_set){
-        trendname <- paste0(exp_, "_trend_lin")
-        lin_trends <- c(lin_trends, trendname)
 
-        d <- mutate(d, !!as.symbol(trendname) := !!as.symbol(exp_) * (year)) 
-      }  
-      fml_lintrends_part <- paste0(lin_trends, collapse = " + ")
-      # add them to the regressors part of the formula, within each regression set 
-      regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_lintrends_part)
-    }
-    
-    potential_controls <- unique(c(potential_controls, log_trends, lin_trends))
+    potential_controls <- unique(c(potential_controls, lin_trends, sqrt_trends, sq_trends, log_trends))
     
     ## FIXED EFFECTS
     # simply add them at the end
@@ -932,8 +978,7 @@ make_main_reg <- function(# outcome
     
   }
   
-  
-  
+
 ### KEEP OBSERVATIONS THAT: ####
   # construct vector of potential variables used 
   # does not matter that regressions of different outcomes are not estimated on the same sample, because they are not meant to be compared
@@ -1144,23 +1189,80 @@ make_main_reg <- function(# outcome
   rm(toreturn)
 }
 
+#### FIGURE HETEROGENEOUS TRENDS --------------------------------------------------------
+# we just run the regression to extract the data used under the preferred specification
+d_clean_out <- make_main_reg(outcome_variable = "undernourished_kcapita", 
+                              include_preperiod = TRUE, 
+                              rfs_lead = 3, 
+                              rfs_lag = 3, 
+                              output = "data")
+
+d_clean_out[[1]]
+expdec <- d_clean_out[[2]] 
+
+# excluded_outcomes <- outcomes[outcomes$year %in% c(2005:2010),c("country", "year", "undernourished_kcapita", "population_kcapita")]
+# expdecfill <- how_to_join(expdec, excluded_outcomes, by = c("country"))
+
+# make a variable for quantiles of import dependency
+Q <- 5 # define quantile
+expdec <- mutate(expdec, exposure_Q = cut_number(dependency_calorie_total, n = Q, labels = paste0("exposure_Q", 1:Q)))
+# check that it worked out
+quantile(expdec$dependency_calorie_total, seq(0, 1, 1/Q))
+head(expdec[!duplicated(expdec$country),c("country", "year", "dependency_calorie_total", "exposure_Q")])
+
+# just redo prevalence, as this is what we want to aggregate over countries, but it's not in the data because not used per se in regression
+expdec <- dplyr::mutate(expdec, undernourished_preval = undernourished_kcapita / population_kcapita)
+
+
+yeardec <- ddply(expdec, c("year", "exposure_Q"), summarise, 
+                 undernourished_preval = mean(undernourished_preval))
+
+ggplot(yeardec, aes(x = year, y = undernourished_preval, group = exposure_Q)) +
+  geom_line(aes(linetype=exposure_Q, col = exposure_Q)) + # 
+  
+  scale_linetype_manual(breaks=paste0("exposure_Q", 1:Q),
+                        values=c("solid", "dotted", "twodash", "longdash", "dotdash"), 
+                        labels=c("1st", "2nd", "3rd", "4th", "5th"),
+                        name="Calorific import \n dependency quintiles") +
+  scale_colour_brewer(breaks=paste0("exposure_Q", 1:Q), 
+                      palette = "Dark2", 
+                      labels=c("1st", "2nd", "3rd", "4th", "5th"), # needs to be repeated so that legend isn't doubled... 
+                      name="Calorific import \n dependency quintiles") +
+  
+  annotate("rect", xmin = 2005, xmax = 2011, ymin = 0.1, ymax = 0.2125, 
+           alpha = .3, col = "lightgrey") + 
+  geom_label(aes(label="Years excluded from analysis",
+                 x=2008,
+                 y=0.215), alpha = 0.8, col = "black",) +
+  scale_x_continuous(breaks = c(2001, 2005, 2011, 2014, 2022)) +
+  scale_y_continuous(name = "Undernourishment prevalence") + 
+  theme_minimal() +
+  theme(legend.position="right", 
+        plot.title = element_text(size = 10, face = "bold"), 
+        axis.title.y.left=element_text(size=10,face="bold", hjust = 1),
+        axis.title.y.right=element_text(size=10,face="bold", hjust = 1),
+        axis.title.x=element_blank(), #element_text(size=10,face="bold", hjust = 0.5), 
+        panel.grid = element_line(inherit.blank = TRUE))  
 
 #### TABLE 1 - REGRESSION --------------------------------------------------------------
 
 est_data_obj_list <- list()
 i <- 1
 for(LINTREND in c(FALSE, TRUE)){
+  #for(SQRTTREND in c(FALSE, TRUE)){
   for(LOGTREND in c(FALSE, TRUE)){
     est_data_obj_list[[i]] <- make_main_reg(outcome_variable = "undernourished_kcapita", 
                                       include_preperiod = TRUE, 
                                       rfs_lead = 3, 
                                       rfs_lag = 3, 
                                       s_trend = LINTREND, 
+                                      #s_trend_sq = SQRTTREND,
                                       s_trend_loga = LOGTREND,
                                       output = "data"
                                       )
     
     i <- i + 1
+  #}
   }
 }
 
@@ -1173,10 +1275,14 @@ fixest_dict=c(undernourished_kcapita = "# people undernourished \n offset by tot
                dependency_calorie_total_X_statute_conv_lead1 = "$t+1$",
                dependency_calorie_total_X_statute_conv_lead2 = "$t+2$",
                dependency_calorie_total_X_statute_conv_lead3 = "$t+3$",
-               dependency_calorie_total_X_statute_conv_lag1 = "$t-1$",
+              dependency_calorie_total_X_statute_conv_lead4 = "$t+4$",
+              dependency_calorie_total_X_statute_conv_lag1 = "$t-1$",
                dependency_calorie_total_X_statute_conv_lag2 = "$t-2$",
                dependency_calorie_total_X_statute_conv_lag3 = "$t-3$", 
+              dependency_calorie_total_X_statute_conv_lag4 = "$t-4$", 
               dependency_calorie_total_trend_lin = "Dependency linear trend", 
+              dependency_calorie_total_trend_sqrt = "Dependency square root trend", 
+              dependency_calorie_total_trend_sq = "Dependency square trend",
               dependency_calorie_total_trend_loga = "Dependency logarithmic trend"
               )
 
@@ -1186,7 +1292,7 @@ etable(est_obj_list,
        dict = fixest_dict,
        depvar = FALSE,
        headers = list("# people undernourished \n (offset by total population)" = length(est_obj_list)),
-       order =  c("-3", "-2", "-1", "$t$", "+"),
+       order =  c("-4", "-3", "-2", "-1", "$t$", "+"),
        extralines = list("^^Calorific imports dependency $*$ \n RFS2 mandates in year:" = rep(" ", length(est_obj_list))),
        digits = 3,
        tpt = TRUE,
@@ -1578,20 +1684,24 @@ schart <- function(data, labels=NA, highlight=NA, n=1, index.est=1, index.se=2, 
 schart_labels <- list(
   "Including 2000-2004 pre-RFS period" = c(""),
   
+  # "Weighting exposure by inverse GDP per capita" = c(""),
+  
   "Exposure period:" = c("2001-2007", 
                          "2004-2007",
                          "2006-2007"),
-  "Relative to population:" = c("initial (2007)", 
-                                "contemporaneous"), 
+  # "Relative to population:" = c("initial (2007)", 
+  #                               "contemporaneous"), 
   
   # "Lags and leads each averaged over:" = c("3 years", 
   #                                          "4 years"),
   
-  "With annual lags up to:" = c("1 year",
+  "With annual lags up to:" = c("none",
+                                "1 year",
                                  "2 years",
                                  "3 years"), 
   
-  "With annual leads up to:" = c("1 year",
+  "With annual leads up to:" = c("none",
+                                 "1 year",
                                   "2 years",
                                   "3 years"),
   
@@ -1611,23 +1721,25 @@ schart_labels <- list(
 # this function has the same arguments as those of make_main_reg that we want to test, + possibly others
 make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
                                offset = "population_kcapita", 
+                               weights = FALSE,
                                start_year = 2009,
                                end_year = 2020, 
                                include_preperiod = TRUE, 
                                # exposure 
-                               pretreat_period = "2004_2007", 
+                               gdp_weighting = TRUE,
+                               pretreat_period = "2001_2007", 
                                # dynamics 
                                rfs_lead = 0,
                                rfs_lag = 0,
                                rfs_fya = 0,
                                # heterogeneity control
                                control_remaining_dependency = TRUE,
-                               s_trend = TRUE,
+                               s_trend = FALSE,
                                s_trend_loga = FALSE,
                                fe = "country + year", 
                                # estimation 
                                distribution = "quasipoisson",
-                               clustering = "oneway", 
+                               clustering = "twoway", 
                                cluster_var1 = "country", 
                                cluster_var2 = "year"
 
@@ -1635,9 +1747,11 @@ make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
   
   regression_sets <- make_main_reg(outcome_variable = outcome_variable, 
                                  offset = offset, 
+                                 weights = weights,
                                  start_year = start_year, 
                                  end_year = end_year, 
                                  include_preperiod = include_preperiod, 
+                                 gdp_weighting = gdp_weighting,
                                  pretreat_period = pretreat_period, 
                                  rfs_lead = rfs_lead, 
                                  rfs_lag = rfs_lag, 
@@ -1666,22 +1780,25 @@ make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
     # include pre-treatment period observations (2000-2004)
     "include_preperiod" = FALSE,
     
+    # "gdp_weighting" = FALSE,
+    
     # pre-treament period for dependency measurement
     "preperiod_2001_2007" = FALSE,
     "preperiod_2004_2007" = FALSE,
     "preperiod_2006_2007" = FALSE,
     
     # offset type
-    "population_kcapita_2007" = FALSE,
-    "population_kcapita" = FALSE,
+    # "population_kcapita_2007" = FALSE,
+    # "population_kcapita" = FALSE,
     
     # dynamics 
     # "ya3" = FALSE,
     # "ya4" = FALSE,
-    
+    "lag0" = FALSE,
     "lag1" = FALSE,
     "lag2" = FALSE,
     "lag3" = FALSE,
+    "lead0" = FALSE,
     "lead1" = FALSE,
     "lead2" = FALSE,
     "lead3" = FALSE,
@@ -1706,14 +1823,17 @@ make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
   # pretreat period observations included
   ind_var[,"include_preperiod"] <- include_preperiod
   
+  # GDP weighting
+  # ind_var[,"gdp_weighting"] <- gdp_weighting
+
   # pretreat period for dependency
   ind_var[,paste0("preperiod_",pretreat_period)] <- TRUE
   
-  ind_var[,offset] <- TRUE
+  # ind_var[,offset] <- TRUE
 
   # dynamics
-  if(rfs_lag>0){ind_var[,paste0("lag",rfs_lag)] <- TRUE}
-  if(rfs_lead>0){ind_var[,paste0("lead",rfs_lead)] <- TRUE}
+  ind_var[,paste0("lag",rfs_lag)] <- TRUE
+  ind_var[,paste0("lead",rfs_lead)] <- TRUE
   # if(rfs_fya>0){ind_var[,paste0("ya",rfs_fya)] <- TRUE} # NOTE that only rfs_fya is a parameter now
 
   # trends 
@@ -1764,55 +1884,60 @@ LEAD <- 3
 
 reg_stats_indvar_list <- list()
 i <- 1
-for(PREOBS in c(TRUE, FALSE)){
-  for(PREPER in names(exposures_list)){
-    for(OFFSET in c("population_kcapita", "population_kcapita_2007")){
-      for(LINTREND in c(TRUE, FALSE)){
-        for(LOGTREND in c(TRUE, FALSE)){
-          for(DISTR in c("quasipoisson")){# "quasipoisson", , "gaussian"
-            # all the specifications above this point are compatible in any combination
-            # However, annual LEAD AND LAG are allowed only when FYA is 0 (and therefore rfs_pya too)
-            #for(FYA in c(0,3,4)){
-             # if(FYA==0){
-                for(LAG in 0:3){
-                  for(LEAD in 0:3){
-                    reg_stats_indvar_list[[i]] <- make_spec_chart_df(outcome_variable = "undernourished_kcapita",
-                                                                     include_preperiod = PREOBS,
-                                                                     pretreat_period = PREPER, 
-                                                                     offset = OFFSET, 
-                                                                     rfs_lag = LAG, 
-                                                                     rfs_lead = LEAD,
-                                                                     #rfs_fya <- FYA,
-                                                                     s_trend = LINTREND, 
-                                                                     s_trend_loga = LOGTREND, 
-                                                                     distribution = DISTR
-                                                                     )
-                    i <- i + 1
+for(PREOBS in c(FALSE, TRUE)){
+  # for(GDPW in c(FALSE, TRUE)){
+    for(PREPER in names(exposures_list)){
+      #for(OFFSET in c("population_kcapita", "population_kcapita_2007")){
+        for(LINTREND in c(FALSE, TRUE)){
+          for(LOGTREND in c(FALSE, TRUE)){
+            for(DISTR in c("quasipoisson")){# "quasipoisson", , "gaussian"
+              # all the specifications above this point are compatible in any combination
+              # However, annual LEAD AND LAG are allowed only when FYA is 0 (and therefore rfs_pya too)
+              #for(FYA in c(0,3,4)){
+               # if(FYA==0){
+                  for(LAG in 0:3){
+                    for(LEAD in 0:3){
+                      reg_stats_indvar_list[[i]] <- make_spec_chart_df(outcome_variable = "undernourished_kcapita",
+                                                                       weights = TRUE,
+                                                                       include_preperiod = PREOBS,
+                                                                       # gdp_weighting = GDPW,
+                                                                       pretreat_period = PREPER, 
+                                                                       #offset = OFFSET, 
+                                                                       rfs_lag = LAG, 
+                                                                       rfs_lead = LEAD,
+                                                                       #rfs_fya <- FYA,
+                                                                       s_trend = LINTREND, 
+                                                                       s_trend_loga = LOGTREND, 
+                                                                       distribution = DISTR, 
+                                                                       clustering = "twoway"
+                                                                       )
+                      i <- i + 1
+                    }
                   }
-                }
-             # } else { # i.e. FYA > 0
-                # LAG <- 0
-                # LEAD <- 0
-                # reg_stats_indvar_list[[i]] <- make_spec_chart_df(outcome_variable = "undernourished_kcapita",
-                #                                                include_preperiod = PREOBS,
-                #                                                pretreat_period = PREPER, 
-                #                                                offset = OFFSET, 
-                #                                                rfs_lag = LAG, 
-                #                                                rfs_lead = LEAD,
-                #                                                rfs_fya = FYA,
-                #                                                s_trend = LINTREND, 
-                #                                                s_trend_loga = LOGTREND, 
-                #                                                distribution = DISTR
-                #                                                )
-                # i <- i + 1
-                
-            #   }
-            # }
+               # } else { # i.e. FYA > 0
+                  # LAG <- 0
+                  # LEAD <- 0
+                  # reg_stats_indvar_list[[i]] <- make_spec_chart_df(outcome_variable = "undernourished_kcapita",
+                  #                                                include_preperiod = PREOBS,
+                  #                                                pretreat_period = PREPER, 
+                  #                                                offset = OFFSET, 
+                  #                                                rfs_lag = LAG, 
+                  #                                                rfs_lead = LEAD,
+                  #                                                rfs_fya = FYA,
+                  #                                                s_trend = LINTREND, 
+                  #                                                s_trend_loga = LOGTREND, 
+                  #                                                distribution = DISTR
+                  #                                                )
+                  # i <- i + 1
+                  
+              #   }
+              # }
+            }
           }
         }
-      }
-    }
-  }
+      #}
+    }  
+  #}
 }
 
 
@@ -1821,11 +1946,12 @@ reg_stats_indvar <- bind_rows(reg_stats_indvar_list)
 
 # save it 
 if(sum(duplicated(reg_stats_indvar))==0 ){ # i.e. 50 currently & nrow(reg_stats_indvar)+1 == i
-  saveRDS(reg_stats_indvar, file.path(paste0("temp_data/reg_results/spec_chart_df_2waycluster_",Sys.Date())))
+  saveRDS(reg_stats_indvar, file.path(paste0("temp_data/reg_results/spec_chart_df_2waycluster_weighted",Sys.Date())))
 } else{print(paste0("SOMETHING WENT WRONG in spec_chart_df"))}
 
+scdf <- reg_stats_indvar
 
-scdf <- readRDS(file.path(paste0("temp_data/reg_results/spec_chart_df_2waycluster_",Sys.Date())))
+scdf <- readRDS(file.path(paste0("temp_data/reg_results/spec_chart_df_2waycluster_weighted",Sys.Date())))
 
 # are there duplicated estimates (this is not expected) 
 scdf[duplicated(scdf[,c(1,2)]), ] # Poisson may be exactly the same as quasipoisson at the level of rounding CIs
@@ -1859,10 +1985,9 @@ schart(scdf,
 )
 
 #### Focusing on dynamics ----------------------------------------------------------
-scdf1 <- dplyr::filter(scdf, preperiod_2001_2007, population_kcapita) 
+scdf1 <- dplyr::filter(scdf, preperiod_2001_2007) # , population_kcapita
 # Lighten labels in bottom panel 
-scdf1 <- dplyr::select(scdf1, -preperiod_2001_2007, -preperiod_2004_2007, -preperiod_2006_2007, 
-                       -population_kcapita, -population_kcapita_2007)
+scdf1 <- dplyr::select(scdf1, -preperiod_2001_2007, -preperiod_2004_2007, -preperiod_2006_2007) #, -population_kcapita, -population_kcapita_2007
 schart_labels1 <- schart_labels[!(names(schart_labels) %in% c("Exposure period:", "Relative to population:"))]
 
 ##### Without pre-treatment period ---------------------------------------------
