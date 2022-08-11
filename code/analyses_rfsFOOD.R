@@ -599,7 +599,7 @@ end_year = 2020
 
 # dynamics 
 rfs_lead = 3
-rfs_lag = 4
+rfs_lag = 3
 rfs_fya = 0
 rm(rfs_pya) # needs to be reinitialized every time
 lag_controls = NULL
@@ -608,10 +608,10 @@ aggr_dyn = TRUE
 # heterogeneity control
 control_remaining_dependency = TRUE
 s_trend = TRUE
-s_trend_sqrt = TRUE
+s_trend_sqrt = FALSE
 s_trend_sq = FALSE
-s_trend_loga = FALSE
-fe = "country + year" #  
+s_trend_loga = TRUE
+fe = "year" #  
 
 # estimation 
 distribution = "quasipoisson"
@@ -678,7 +678,7 @@ make_main_reg <- function(# outcome
                           cluster_var2 = "year",
                           glm_iter = 25,
 
-                          output = "coef_table", # one of est_object, "coef_table", or "total_simulations"
+                          output = "coef_table", # one of est_object, "coef_table", or "everything"
                           
                           rfs_rando = "" # either "between", "within", or any other string. If one of the former two, randomization inference of the type is performed
 ){
@@ -1171,16 +1171,12 @@ make_main_reg <- function(# outcome
     toreturn <- reg_res_main
   }
   
-  if(output == "data"){
-    toreturn <- list(reg_res_main, d_clean)
-  }
-  
   if(output == "coef_table"){
     toreturn <- regression_sets
   }
   
-  if(output == "total_simulations"){
-    toreturn <- sim_summary
+  if(output == "everything"){
+    toreturn <- list(reg_res_main, d_clean, regression_sets)
   }
   
   
@@ -1195,7 +1191,7 @@ d_clean_out <- make_main_reg(outcome_variable = "undernourished_kcapita",
                               include_preperiod = TRUE, 
                               rfs_lead = 3, 
                               rfs_lag = 3, 
-                              output = "data")
+                              output = "everything")
 
 d_clean_out[[1]]
 expdec <- d_clean_out[[2]] 
@@ -1244,6 +1240,9 @@ ggplot(yeardec, aes(x = year, y = undernourished_preval, group = exposure_Q)) +
         axis.title.x=element_blank(), #element_text(size=10,face="bold", hjust = 0.5), 
         panel.grid = element_line(inherit.blank = TRUE))  
 
+# and extract number of people comprised in the sample in 2011
+d_clean_out %>% dplyr::filter(year == 2011) %>% dplyr::select(population_kcapita) %>% sum()
+
 #### TABLE 1 - REGRESSION --------------------------------------------------------------
 
 est_data_obj_list <- list()
@@ -1258,7 +1257,7 @@ for(LINTREND in c(FALSE, TRUE)){
                                       s_trend = LINTREND, 
                                       #s_trend_sq = SQRTTREND,
                                       s_trend_loga = LOGTREND,
-                                      output = "data"
+                                      output = "everything"
                                       )
     
     i <- i + 1
@@ -1266,39 +1265,51 @@ for(LINTREND in c(FALSE, TRUE)){
   }
 }
 
+# extract aggregated effects, in the coef table put in 3rd position in the list
+coef_table_list <- lapply(est_data_obj_list, FUN = function(x){coef_df <- x[[3]][["total"]][["df_res"]]
+                                                               est <- coef_df[grepl("_aggrall", row.names(coef_df)), "Estimate"]%>%formatC(format = "f", digits = 3)
+                                                               SE <- coef_df[grepl("_aggrall", row.names(coef_df)), "Std. Error"]%>%formatC(format = "f", digits = 3)
+                                                               paste0(est," \n (",SE,")")})
+
+
+
 # each element of est_obj_list is a list with the fixest object in the first element, and the data d_clean in the second
 # extract a list of estimation objects only 
 est_obj_list <- lapply(est_data_obj_list, FUN = function(x){x[[1]]})
 
 fixest_dict=c(undernourished_kcapita = "# people undernourished \n offset by total population",
-               dependency_calorie_total_X_statute_conv = "$t$",
-               dependency_calorie_total_X_statute_conv_lead1 = "$t+1$",
-               dependency_calorie_total_X_statute_conv_lead2 = "$t+2$",
-               dependency_calorie_total_X_statute_conv_lead3 = "$t+3$",
-              dependency_calorie_total_X_statute_conv_lead4 = "$t+4$",
-              dependency_calorie_total_X_statute_conv_lag1 = "$t-1$",
-               dependency_calorie_total_X_statute_conv_lag2 = "$t-2$",
-               dependency_calorie_total_X_statute_conv_lag3 = "$t-3$", 
-              dependency_calorie_total_X_statute_conv_lag4 = "$t-4$", 
-              dependency_calorie_total_trend_lin = "Dependency linear trend", 
-              dependency_calorie_total_trend_sqrt = "Dependency square root trend", 
-              dependency_calorie_total_trend_sq = "Dependency square trend",
-              dependency_calorie_total_trend_loga = "Dependency logarithmic trend"
+               dependency_calorie_total_X_statute_conv = "$\\hat{\\beta}^{0}$",
+               dependency_calorie_total_X_statute_conv_lead1 = "$\\hat{\\beta}^{1}$",
+               dependency_calorie_total_X_statute_conv_lead2 = "$\\hat{\\beta}^{2}$",
+               dependency_calorie_total_X_statute_conv_lead3 = "$\\hat{\\beta}^{3}$",
+              dependency_calorie_total_X_statute_conv_lead4 = "$\\hat{\\beta}^{4}$",
+              dependency_calorie_total_X_statute_conv_lag1 = "$\\hat{\\beta}^{-1}$",
+               dependency_calorie_total_X_statute_conv_lag2 = "$\\hat{\\beta}^{-2}$",
+               dependency_calorie_total_X_statute_conv_lag3 = "$\\hat{\\beta}^{-3}$", 
+              dependency_calorie_total_X_statute_conv_lag4 = "$\\hat{\\beta}^{-4}$", 
+              dependency_calorie_total_trend_lin = "$\\hat{\\tau}$", 
+              dependency_calorie_total_trend_loga = "$\\hat{\\theta}$"
               )
 
 
 etable(est_obj_list, 
-       tex = FALSE,
+       tex = TRUE,
+       title = "Dynamic coefficients of quasi-poisson regressions",
+       label = "table1",
+       # tabular = "X",
        dict = fixest_dict,
        depvar = FALSE,
-       headers = list("# people undernourished \n (offset by total population)" = length(est_obj_list)),
-       order =  c("-4", "-3", "-2", "-1", "$t$", "+"),
-       extralines = list("^^Calorific imports dependency $*$ \n RFS2 mandates in year:" = rep(" ", length(est_obj_list))),
+       style.tex = style.tex(var.title = "\\midrule \\emph{Coefficients}"), # for some reason I need to add back the black line between headers and coefficients part
+       headers = list("Dep. var." = list("# people undernourished \n (offset by total population)" = length(est_obj_list)),
+                      "_Full effects:" = list(coef_table_list)), # the underscore places this head below the model header
+       order =  c("-3", "-2", "-1", "{0}", "{1}", "{2}", "{3}"),
+       # extralines = list("^^Calorific import dependency $*$ \n RFS2 mandates in year:" = rep(" ", length(est_obj_list))),
        digits = 3,
+       signif.code = NA,
        tpt = TRUE,
        # file = here("temp_data", "reg_results", "table1"), 
        # replace = TRUE
-       placement = "H!")
+       placement = "H")
 
 
 #### COUNTERFACTUAL MAGNITUDE SIMULATIONS -----------------------------------------------------------
