@@ -582,10 +582,11 @@ leaflet() %>%
 outcome_variable = "undernourished_kcapita" #   # c("foodinsecu_modsevere_kcapita", "foodinsecu_severe_kcapita", "undernourished_kcapita", "stunting_kcapita", "wasting_kcapita")
 offset = "population_kcapita"
 weights = FALSE
-include_preperiod = TRUE
+preperiod_end = 2004
+exclude_bad_expo_proxy = FALSE # if TRUE, removes countries with an outliing absolute ratio of post-exposure/pre-exposure (>1.5*IQR)
 
 # exposure 
-pretreat_period = "2001_2007" # names(exposures_list)
+expo_measure_period = "2001_2007" # names(exposures_list)
 calorie_only = TRUE
 commodities = "total"
 gdp_weighting = FALSE
@@ -611,14 +612,14 @@ s_trend = TRUE
 s_trend_sqrt = FALSE
 s_trend_sq = FALSE
 s_trend_loga = TRUE
-fe = "year" #  
+fe = "country + year" #  
 
 # estimation 
 distribution = "quasipoisson"
 invhypsin = FALSE 
 preclean_level = "FE" 
 clustering = "twoway"
-cluster_var1 = "country" 
+cluster_var1 = 20 
 cluster_var2 = "year"
 glm_iter = 25
 
@@ -636,26 +637,27 @@ make_main_reg <- function(# outcome
                           outcome_variable = "undernourished_kcapita",
                           offset = "population_kcapita", # should the log of the annual ("population_kcapita") or of the pre-period ("population_kcapita_2007") population size be added as an offset (i.e. linearly to the fml element of fixest)? Any positive constant number yields no offset
                           # sample
-                          weights = FALSE, # should population weights be used in the regression
-                          include_preperiod = TRUE, # whether to include years 2000-2004 as a pre-treatment period where the outcomes are unaffected by any RFS mandate
+                          start_year = 2009, # nto much useful, as this is mostly driven by the choice of rfs_lag
+                          end_year = 2020, # not much useful, as this is mostly driven by the choice of rfs_lead
+                          preperiod_end = 2004, # after which year to stop assuming that RFS1 could not anticipated (i.e. until when to assume it could not be anticipated). This trims the data after this year, and until start_year. 
                           remove_wellnourished = TRUE, # removes countries which undernourishment prevalence is "<2.5%" every year of the study period (according to FAOSTAT)
+                          exclude_bad_expo_proxy = FALSE, # if TRUE, removes countries with an outliing absolute ratio of post-exposure/pre-exposure (>1.5*IQR)
+                          weights = FALSE, # should population weights be used in the regression
                           
                           # exposure
                           commodities = "total", # if TRUE, then all prepared regression sets are run for the chosen outcome. Otherwise, commodities should be a character vector containing one or several elements of names(exposures_names_list). May not be available for a given outcome, depending on exposure_outcome_map. If "" or NULL, all regressions allowed by exposure_outcome_map are run
                           gdp_weighting = FALSE,
-                          pretreat_period = "2001_2007", # one of names(exposures_list)
+                          expo_measure_period = "2001_2007", # one of names(exposures_list)
                           calorie_only = TRUE, # this should be left TRUE if outcome is undernourished. Set to FALSE to estimate conditional effects through
                           # all nutrient-specific exposures (calorie, protein and fat). Inconsequential if outcome is foodinsecu_*
                           # nutrient = "calorie", currently not used, because either all nutrients are included, or only calorie, or it's exposure is not in nutrient terms. # one of "calorie", "protein", or "fat". This is used only when studying childhood malnutrition or nutrient supply
                           
                           # shocks
                           original_rfs_treatments = c("statute_conv"),
-                          start_year = 2009, 
-                          end_year = 2020, 
                           
                           # dynamics 
-                          rfs_lead = 0,
-                          rfs_lag = 0,
+                          rfs_lead = 3,
+                          rfs_lag = 3,
                           rfs_fya = 0, 
                           # rfs_pya = 0, # this is determined as a function of rfs_fya, in code
                           lag_controls = NULL, # which of the lags specified above should be CONTROLLED for rather than counted in the cumulative effect
@@ -663,10 +665,10 @@ make_main_reg <- function(# outcome
                           
                           # heterogeneity control
                           control_remaining_dependency = TRUE,  
-                          s_trend = FALSE,
+                          s_trend = TRUE,
                           s_trend_sqrt = FALSE,
                           s_trend_sq = FALSE,
-                          s_trend_loga = FALSE,
+                          s_trend_loga = TRUE,
                           fe = "country + year", 
                           
                           # estimation 
@@ -674,7 +676,7 @@ make_main_reg <- function(# outcome
                           invhypsin = FALSE, # currently not used. if distribution is gaussian, should the dep. var. be transformed to inverse hyperbolic sine? If FALSE, and gaussian, outcome is transformed in log
                           preclean_level = "FE", 
                           clustering = "twoway", # either "oneway" or "twoway". If oneway, it clusters on cluster_var1. 
-                          cluster_var1 = "country", 
+                          cluster_var1 = "country", # this can be a numeric, in which case this number is interpreted as the number of quantiles of the exposure variable by which to cluster in this dimension. For instance, 20 makes 20 tiles of dependency var
                           cluster_var2 = "year",
                           glm_iter = 25,
 
@@ -687,8 +689,8 @@ make_main_reg <- function(# outcome
   # manipulate a different data set so that original one can be provided to all functions and not read again every time. 
 
   # merge exposures average over the specified pre-treatment period
-  d <- inner_join(main_data, exposures_list[[pretreat_period]], by = "country") # exposure data is a cross section 
-  # d <- left_join(main_data, exposures_list[[pretreat_period]], by = "country") # this should yield the same number of rows
+  d <- inner_join(main_data, exposures_list[[expo_measure_period]], by = "country") # exposure data is a cross section 
+  # d <- left_join(main_data, exposures_list[[expo_measure_period]], by = "country") # this should yield the same number of rows
   
   # grep("enegro", unique(d$country), value = TRUE)
   
@@ -756,14 +758,11 @@ make_main_reg <- function(# outcome
     start_year <- 2008+max(rfs_lag, rfs_pya)
   }
   
-  # but if we include early period, then everything starts in 2000
-  # and then, some changes are needed in the data, such that years under RFS1 are not included
-  # the years under the influence of RFS1 dependes on our assumption on lag length (and hence depends on start_year as set above)
+  # Some changes are needed in the data, such that years under RFS1 are not included
+  # the years under the influence of RFS1 depend on our assumption on lag length (and hence depends on start_year as set above)
   # (but the RFS1 mandates being set to NAs would have had these years removed too)
-  if(include_preperiod){
-    # start in 2005, because the first mandates statuted, for 2006, may have been anticipated already in 2005 (although it was voted in December 2005).  
-    d[d$year >= 2005 & d$year < start_year, outcome_variable] <- NA
-  }
+  # and on our assumption on how early the RFS1 was anticipated. Default is 2005, but this can be flexibly made earlier.
+  d[d$year > preperiod_end & d$year < start_year, outcome_variable] <- NA
   
   # no safety measure for end_year, as it cannot go too late, there is no endogenous rfs after 2022 in our current data.
   
@@ -983,10 +982,7 @@ make_main_reg <- function(# outcome
   # construct vector of potential variables used 
   # does not matter that regressions of different outcomes are not estimated on the same sample, because they are not meant to be compared
   
-  # - are in study period
-  if(!include_preperiod){
-    d <- dplyr::filter(d, year >= start_year)
-  }
+  # not really useful, as the end of the data is trimmed by the farthest lead variable in mani spec. 
   d <- dplyr::filter(d, year <= end_year)
   
   # remove those countries that are always under the 2.5% undernourishment prevalence threshold
@@ -997,6 +993,28 @@ make_main_reg <- function(# outcome
       
      d <- dplyr::filter(d, !(country %in% c(well_nourished_c)))
 
+  }
+  
+  d_save <- d 
+  
+  # Remove countries with an outliing absolute ratio of post-exposure/pre-exposure (>1.5*IQR)
+  if(exclude_bad_expo_proxy){
+    
+    postdep <- readRDS(here("temp_data", "exposures_20102019", "dependency_20102019.Rdata"))
+
+    postdep <- dplyr::select(postdep, country, dependency_calorie_total)
+    
+    names(postdep) <- c("country", "dependency_calorie_total_post")
+  
+    d <- left_join(d, postdep, by = "country")
+    
+    d <- dplyr::mutate(d, ratio = dependency_calorie_total_post/dependency_calorie_total)
+    d <- dplyr::select(d, -dependency_calorie_total_post)
+    # ratio_iqr <- IQR(d$ratio, na.rm = TRUE)
+    otl_values <- boxplot.stats(d$ratio)$out %>% unique
+    
+    d <- dplyr::filter(d, !(ratio %in% otl_values))
+    
   }
   
   d_save <- d 
@@ -1057,6 +1075,11 @@ make_main_reg <- function(# outcome
   # In both cases, we are interested in a one-line output
   
   # handle SE computation flexibly within feglm now, through argument vcov
+  if(is.numeric(cluster_var1)){
+    d_clean <- mutate(d_clean, !!as.symbol(paste0("expo_",cluster_var1,"tiles")) := cut_number(dependency_calorie_total, n = cluster_var1, labels = paste0("exposure_Q", 1:cluster_var1)))
+    cluster_var1 <- paste0("expo_",cluster_var1,"tiles")
+  }
+  
   if(clustering =="twoway"){
     se <- as.formula(paste0("~ ", paste0(c(cluster_var1, cluster_var2), collapse = "+")))
   }
@@ -1188,13 +1211,20 @@ make_main_reg <- function(# outcome
 #### FIGURE HETEROGENEOUS TRENDS --------------------------------------------------------
 # we just run the regression to extract the data used under the preferred specification
 d_clean_out <- make_main_reg(outcome_variable = "undernourished_kcapita", 
-                              include_preperiod = TRUE, 
+                              preperiod_end = 2004, 
                               rfs_lead = 3, 
                               rfs_lag = 3, 
                               output = "everything")
 
 d_clean_out[[1]]
 expdec <- d_clean_out[[2]] 
+
+# just redo prevalence, as this is what we want to aggregate over countries, but it's not in the data because not used per se in regression
+expdec <- dplyr::mutate(expdec, undernourished_preval = undernourished_kcapita / population_kcapita)
+
+# demean, using convenient fixest fnct
+expdec$undernourished_preval_dm <- fixest::demean(X = as.formula("undernourished_preval ~ country"), data = expdec, as.matrix = TRUE) %>% unname()
+
 
 # excluded_outcomes <- outcomes[outcomes$year %in% c(2005:2010),c("country", "year", "undernourished_kcapita", "population_kcapita")]
 # expdecfill <- how_to_join(expdec, excluded_outcomes, by = c("country"))
@@ -1203,35 +1233,31 @@ expdec <- d_clean_out[[2]]
 Q <- 5 # define quantile
 expdec <- mutate(expdec, exposure_Q = cut_number(dependency_calorie_total, n = Q, labels = paste0("exposure_Q", 1:Q)))
 # check that it worked out
-quantile(expdec$dependency_calorie_total, seq(0, 1, 1/Q))
-head(expdec[!duplicated(expdec$country),c("country", "year", "dependency_calorie_total", "exposure_Q")])
-
-# just redo prevalence, as this is what we want to aggregate over countries, but it's not in the data because not used per se in regression
-expdec <- dplyr::mutate(expdec, undernourished_preval = undernourished_kcapita / population_kcapita)
-
+#quantile(expdec$dependency_calorie_total, seq(0, 1, 1/Q))
+#head(expdec[!duplicated(expdec$country),c("country", "year", "dependency_calorie_total", "exposure_Q")])
 
 yeardec <- ddply(expdec, c("year", "exposure_Q"), summarise, 
-                 undernourished_preval = mean(undernourished_preval))
+                 undernourished_preval_dm = mean(undernourished_preval_dm))
 
-ggplot(yeardec, aes(x = year, y = undernourished_preval, group = exposure_Q)) +
+ggplot(yeardec, aes(x = year, y = undernourished_preval_dm, group = exposure_Q)) +
   geom_line(aes(linetype=exposure_Q, col = exposure_Q)) + # 
   
   scale_linetype_manual(breaks=paste0("exposure_Q", 1:Q),
                         values=c("solid", "dotted", "twodash", "longdash", "dotdash"), 
-                        labels=c("1st", "2nd", "3rd", "4th", "5th"),
+                        labels=c("1st", "2nd", "3rd", "4th", "5th")[1:Q],
                         name="Calorific import \n dependency quintiles") +
   scale_colour_brewer(breaks=paste0("exposure_Q", 1:Q), 
                       palette = "Dark2", 
-                      labels=c("1st", "2nd", "3rd", "4th", "5th"), # needs to be repeated so that legend isn't doubled... 
+                      labels=c("1st", "2nd", "3rd", "4th", "5th")[1:Q], # needs to be repeated so that legend isn't doubled... 
                       name="Calorific import \n dependency quintiles") +
   
-  annotate("rect", xmin = 2005, xmax = 2011, ymin = 0.1, ymax = 0.2125, 
-           alpha = .3, col = "lightgrey") + 
-  geom_label(aes(label="Years excluded from analysis",
-                 x=2008,
-                 y=0.215), alpha = 0.8, col = "black",) +
+  # annotate("rect", xmin = 2005, xmax = 2011, ymin = 0.1, ymax = 0.2125, 
+  #          alpha = .3, col = "lightgrey") + 
+  # geom_label(aes(label="Years excluded from analysis",
+  #                x=2008,
+  #                y=0.215), alpha = 0.8, col = "black",) +
   scale_x_continuous(breaks = c(2001, 2005, 2011, 2014, 2022)) +
-  scale_y_continuous(name = "Undernourishment prevalence") + 
+  scale_y_continuous(name = "Undernourishment prevalence COUNTRY demeaned") + 
   theme_minimal() +
   theme(legend.position="right", 
         plot.title = element_text(size = 10, face = "bold"), 
@@ -1251,7 +1277,7 @@ for(LINTREND in c(FALSE, TRUE)){
   #for(SQRTTREND in c(FALSE, TRUE)){
   for(LOGTREND in c(FALSE, TRUE)){
     est_data_obj_list[[i]] <- make_main_reg(outcome_variable = "undernourished_kcapita", 
-                                      include_preperiod = TRUE, 
+                                      preperiod_end = 2004, 
                                       rfs_lead = 3, 
                                       rfs_lag = 3, 
                                       s_trend = LINTREND, 
@@ -1312,181 +1338,7 @@ etable(est_obj_list,
        placement = "H")
 
 
-#### COUNTERFACTUAL MAGNITUDE SIMULATIONS -----------------------------------------------------------
-
-# implied by coefficient, for undernourishment outcome and total commodity dependency 
-# The aim is to estimate the annually averaged count of undernourished people avoided globally
-magnitudes_list <- list()
-MDL <- 1
-set.seed(8888)
-for(EST_DATA_OBJ in est_data_obj_list){
-  
-  EST_OBJ <- EST_DATA_OBJ[[1]]
-  d_clean <- EST_DATA_OBJ[[2]]
-  
-  # coefficients and vcov matrix
-  beta <- EST_OBJ$coefficients
-  beta_cov <- vcov(EST_OBJ)
-  
-  # fitted values
-  nrow(d_clean) == length(EST_OBJ$fitted.values)
-  all(EST_OBJ$fitted.values == fitted(EST_OBJ))
-  
-  d_clean$fv <- EST_OBJ$fitted.values  
-  d_clean$lp <- EST_OBJ$linear.predictors
-  summary(d_clean$fv)
-  # summary(d_clean[,outcome_variable])
-  
-  
-  ##### MONTE CARLO SIMULATIONS ####
-  # 3 steps, repeated for each draw
-  # 1. Sum dynamic coefficients --> cumulative coefficients (common to all obs.)
-  # 2. Multiply these cumulative coefficients by the dependency exposure --> scaled effects (common within countries)
-  # 3. Insert these in the counterfactual formula (which features the fitted values, that are country-year specific)
-  
-  # Then, for each draw, we output different quantities: 
-  # - Country averages over time to see which countries were hit the worst
-  # - Annual sums over countries to see which years were the worst 
-  # - The annually averaged count of undernourished people avoided globally
-  # - The global and period avergae of the undernourishment prevalence  
-  
-  # collected here 
-  sim_outputs <- list(periodavg_i = NULL, 
-                      globalsum_t = NULL, 
-                      globalsum_periodavg = NULL)
-  
-  # In preparation for step 2, make a cross-section of the countries, with their time invariant dependency 
-  d_clean_cs <- d_clean[!duplicated(d_clean$country), c("country", "dependency_calorie_total")]
-  
-  # And for step 3, subset the unique identifiers of panel d_clean and the fitted values
-  # FOR THE YEARS POST TREATMENT! 
-  d_clean_base <- d_clean[d_clean$year>=2008 ,c("country", "year", "fv", "population_kcapita")]
-  
-  n <- 1000
-  # store in a single row the aggregated effect (of dependency_calorie_total, aggregated over treatment window)
-  rep_effects <- data.frame(matrix(ncol = n, nrow = 1)) 
-  
-  row.names(rep_effects) <- c("total")
-  
-  # mod_adj <- reg_res_main
-  # each column is one replication. Each row is one beta (coefficient). 
-  beta_draw <- t(MASS::mvrnorm(n, mu = beta, Sigma = beta_cov))
-  
-  for(draw in 1:n){
-    
-    beta <- beta_draw[,draw]
-    
-    # Step 1. Make cumulative coefficients
-    
-    annual_coeff_names <- grep(pattern = "dependency_calorie_total_X_statute_conv", names(coef(EST_OBJ)), value = TRUE)
-    
-    cum_beta <- beta[annual_coeff_names] %>% sum() # this is a scalar in the present case
-    
-    
-    # Step 2. Make scaled effects
-    
-    # important that the scaled effect df be "reinitialized" at each replication 
-    # the cross-section of exposure data does not change with every replication
-    scaled_effects_i <- d_clean_cs
-    scaled_effects_i$scaled_effects_i <- d_clean_cs[,"dependency_calorie_total"] * cum_beta
-    
-    
-    # Step 3. Make the country-year predicted factual - counterfactual difference 
-    ctfl_it <- left_join(d_clean_base, scaled_effects_i, by = "country")
-    
-    #  # NOTE THE MINUS SCALED EFFECTS: it represents the counterfactual scenarios of mandates 1bgal lower every year
-    # Also, the 1 - exp() reflects that we difference factual - counterfactual, and not the other way round (just a matter of interpretation eventually)
-    ctfl_it <- dplyr::mutate(ctfl_it, ctfl_diff = fv * (1 - exp(-scaled_effects_i))) # NOTE THE MINUS SCALED EFFECTS
-    
-    
-    # return outputs of interest
-    sim_outputs[["periodavg_i"]][[draw]] <- ddply(ctfl_it, "country", summarise, 
-                                                  kcapita_diff_periodavg = mean(ctfl_diff, na.rm = TRUE))
-    
-    sim_outputs[["globalsum_t"]][[draw]] <- ddply(ctfl_it, "year", summarise, 
-                                                  kcapita_diff_globalsum = sum(ctfl_diff, na.rm = TRUE), 
-                                                  annual_pop = sum(population_kcapita, na.rm = TRUE)) # this would be constant, if offset was pop in 2007
-    
-    # within each year, divide the global count of undernourished people by the total population that year, to get the annual global prevalence effect
-    sim_outputs[["globalsum_t"]][[draw]] <- dplyr::mutate(sim_outputs[["globalsum_t"]][[draw]], 
-                                                          preval_diff_globalsum = kcapita_diff_globalsum/annual_pop)
-    
-    # we do averages of already computed, annual global sums
-    sim_outputs[["globalsum_periodavg"]][[draw]] <- data.frame(kcapita_diff = mean(sim_outputs[["globalsum_t"]][[draw]][,"kcapita_diff_globalsum"], na.rm = TRUE), 
-                                                               preval_diff = mean(sim_outputs[["globalsum_t"]][[draw]][,"preval_diff_globalsum"], na.rm = TRUE))
-    
-  }
-  
-  sim_summary <- list()
-  
-  sim_summary[["periodavg_i"]] <- sim_outputs[["periodavg_i"]] %>% bind_rows() %>% ddply("country", summarise,
-                                                                                         est_kcapita_diff_periodavg = mean(kcapita_diff_periodavg, na.rm = T),
-                                                                                         se_kcapita_diff_periodavg = sd(kcapita_diff_periodavg, na.rm = T))
-  
-  sim_summary[["globalsum_t"]] <- sim_outputs[["globalsum_t"]] %>% bind_rows() %>% ddply("year", summarise,
-                                                                                         est_kcapita_diff_globalsum = mean(kcapita_diff_globalsum, na.rm = T),
-                                                                                         se_kcapita_diff_globalsum = sd(kcapita_diff_globalsum, na.rm = T), 
-                                                                                         est_preval_diff_globalsum = mean(preval_diff_globalsum, na.rm = T),
-                                                                                         se_preval_diff_globalsum = sd(preval_diff_globalsum, na.rm = T))
-  
-  sim_summary[["globalsum_periodavg"]] <- sim_outputs[["globalsum_periodavg"]] %>% bind_rows() %>% summarise( 
-    est_kcapita_diff_gspa = mean(kcapita_diff, na.rm = TRUE), 
-    se_kcapita_diff_gspa = sd(kcapita_diff, na.rm = TRUE), 
-    est_preval_diff_gspa = mean(preval_diff, na.rm = TRUE), 
-    se_preval_diff_gspa = sd(preval_diff, na.rm = TRUE))
-  
-  # ON EN EST LAAAAAAAAAAA
-  # effects_stats <- dplyr::mutate(effects_stats, ci95lb = (avg - qt(0.975, df = n-1)*std_dev/sqrt(n)))
-  # effects_stats <- dplyr::mutate(effects_stats, ci95hb = (avg + qt(0.975, df = n-1)*std_dev/sqrt(n)))
-  # 
-  # row.names(effects_stats) <- row.names(rep_effects)
-  # 
-  # # return 
-  # effects_list[[CNT]][["crop_effects"]] <- crop_effects
-  # effects_list[[CNT]][["total_effect"]] <- total_effect
-  
-  # Print figures features in the text: 
-  trend_names <- c("dependency_calorie_total_trend_lin", "dependency_calorie_total_trend_loga")
-  coef_names <- names(beta)
-  
-  if(!any(grepl("trend_lin", coef_names)) & !any(grepl("trend_loga", coef_names)) ){
-    print(paste0("Not controlling for exposure trends: ", 
-                 round(sim_summary[["globalsum_periodavg"]]$est_kcapita_diff_gspa, 0), 
-                 " (+/- ", round(sim_summary[["globalsum_periodavg"]]$se_kcapita_diff_gspa, 0), ") thousand people"))
-  }
-  if(any(grepl("trend_lin", coef_names)) & !any(grepl("trend_loga", coef_names)) ){
-    print(paste0("Controlling for exposure level, linear trends: ", 
-                 round(sim_summary[["globalsum_periodavg"]]$est_kcapita_diff_gspa, 0), 
-                 " (+/- ", round(sim_summary[["globalsum_periodavg"]]$se_kcapita_diff_gspa, 0), ") thousand people"))
-  }
-  if(!any(grepl("trend_lin", coef_names)) & any(grepl("trend_loga", coef_names)) ){
-    print(paste0("Controlling for exposure level, logarithmic trends: ", 
-                 round(sim_summary[["globalsum_periodavg"]]$est_kcapita_diff_gspa, 0), 
-                 " (+/- ", round(sim_summary[["globalsum_periodavg"]]$se_kcapita_diff_gspa, 0), ") thousand people"))
-  }
-  if(any(grepl("trend_lin", coef_names)) & any(grepl("trend_loga", coef_names)) ){
-    print(paste0("Controlling for exposure level, linear and logarithmic trends: ", 
-                 round(sim_summary[["globalsum_periodavg"]]$est_kcapita_diff_gspa, 0), 
-                 " (+/- ", round(sim_summary[["globalsum_periodavg"]]$se_kcapita_diff_gspa, 0), ") thousand people"))
-  }
-    
-    
-  
-  magnitudes_list[[MDL]] <- sim_summary
-  MDL <- MDL + 1
-}
-print("The # of undernourished people that could have been avoided annually, over the hundred countries in the sample, had the mandates been 1bgal lower than what they actually were, every year :") 
-
-
-magnitudes_list[[1]]
-
-saveRDS(magnitudes_list, here("temp_data", "reg_results", "magnitudes_list.Rdata"))
-
-
-
-
-#### SPECIFICATION CHART -----------------------------------------------------------------------------
-
+#### ROBUSTNESS CHECKS ------------------------------------------------------------------------------
 # The function is written in base R and exactly copied from https://github.com/ArielOrtizBobea/spec_chart/blob/master/spec_chart_function.R
 schart <- function(data, labels=NA, highlight=NA, n=1, index.est=1, index.se=2, index.ci=NA,
                    order="asis", ci=.95, ylim=NA, axes=T, heights=c(1,1), leftmargin=11, offset=c(0,0), ylab="Coefficient", lwd.border=1,
@@ -1692,6 +1544,434 @@ schart <- function(data, labels=NA, highlight=NA, n=1, index.est=1, index.se=2, 
   
 } 
 
+# order from more important in terms of possible change in coefficient, to specifications that change only the SEs. 
+schart_labels <- list(
+  # with trends in first position
+  "Exposure trend" = c("linear", 
+                       "logarithmic"),
+
+  # then choices that properly may introduce bias 
+  "Pre-treatment period:" = c("2001-2002",
+                              "2001-2003", 
+                              "2001-2004"),
+  
+  "Farther dynamic effects" = c("Lags up to 4 years", 
+                                "Leads up to 4 years"),
+  
+  # sliding to choices affecting measurement error (not necessarily the good kind)
+  "Year fixed effects (in addition to country FE)" = c(""), 
+  
+  "Exposure measurement over:" = c("2001-2007", 
+                                   "2004-2007",
+                                   "2006-2007"),
+  
+  "W/o countries outlying in exposure time variation" = c(""),
+  
+  "Offset population:" = c("Constant (2007)",
+                           "Running (contemporaneous)"),
+  
+  # and choices affecting only SEs
+  "Two-way clustering, at year level and:" = c("country", 
+                                               "exposure's 50% quantiles", 
+                                               "exposure's 20% quantiles", 
+                                               "exposure's 10% quantiles (deciles)"),
+  
+  "Distribution assumption:" = c("Poisson",
+                                 "quasi-Poisson")
+  
+)
+
+# Need to embed in a function because we then loop over some arguments passed to this function to make different specifications
+# this function has the same arguments as those of make_main_reg that we want to test, + possibly others
+make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
+                               offset = "population_kcapita", 
+                               preperiod_end = 2004, 
+                               exclude_bad_expo_proxy = FALSE,
+                               # exposure 
+                               expo_measure_period = "2001_2007", 
+                               # dynamics 
+                               rfs_lead = 0,
+                               rfs_lag = 0,
+                               # heterogeneity control
+                               s_trend = TRUE,
+                               s_trend_loga = TRUE,
+                               fe = "country + year", 
+                               # estimation 
+                               distribution = "quasipoisson",
+                               clustering = "twoway", 
+                               cluster_var1 = "country", 
+                               cluster_var2 = "year"
+                               
+){
+  # run regression and extract aggregated effect 
+  regression_sets <- make_main_reg(outcome_variable = outcome_variable,
+                                   offset = offset,
+                                   preperiod_end = preperiod_end,
+                                   exclude_bad_expo_proxy = exclude_bad_expo_proxy,
+                                   # exposure 
+                                   expo_measure_period = expo_measure_period,
+                                   # dynamics 
+                                   rfs_lead = rfs_lead,
+                                   rfs_lag = rfs_lag,
+                                   # heterogeneity control
+                                   s_trend = s_trend,
+                                   s_trend_loga = s_trend_loga,
+                                   fe = fe,
+                                   # estimation 
+                                   distribution = distribution,
+                                   clustering = clustering,
+                                   cluster_var1 = cluster_var1,
+                                   cluster_var2 = cluster_var2,
+                                   # these two last arguments determine the type of the output non flexibly
+                                   commodities = "total",
+                                   output = "coef_table")
+  
+  coef_df <- regression_sets[["total"]][["df_res"]]                            
+  aggr_coef_df <- coef_df[grepl("_aggrall", row.names(coef_df)), ]
+  
+  
+  ### make indicator variables that will be used to label specifications. 
+  # Set everything to FALSE, and switch them on afterwards, according to specification passed to make_spec_chart_df
+  # /!\ THE ORDER HERE MATTERS ! IT MUST MATCH THE ORDER IN schart_labels   BELOW
+  ind_var <- data.frame(
+    #"Exposure trend" 
+    "s_trend" = FALSE,
+    "s_trend_loga" = FALSE,
+    # "Pre-treatment period:"
+    "preperiod_end_2002" = FALSE,
+    "preperiod_end_2003" = FALSE,
+    "preperiod_end_2004" = FALSE,
+    # "Farther dynamic effects" 
+    "lag4" = FALSE,
+    "lead4" = FALSE,
+    
+    # "Year fixed effects (in addition to country FE)" 
+    "year_FE" = FALSE,
+    # "Exposure measurement over:" 
+    "expo_measure_period_2001_2007" = FALSE,
+    "expo_measure_period_2004_2007" = FALSE,
+    "expo_measure_period_2006_2007" = FALSE,
+    # "W/o countries outlying in exposure time variation"
+    "exclude_bad_expo_proxy" = FALSE,
+    # "Offset population:" 
+    "population_kcapita_2007" = FALSE,
+    "population_kcapita" = FALSE,
+
+    
+    # "Two-way clustering, at year level and:"
+    "country" = FALSE, 
+    "expo_50tiles" = FALSE,
+    "expo_20tiles" = FALSE,
+    "expo_10tiles" = FALSE,
+    # "Distribution assumption:"
+    "poisson" = FALSE,
+    "quasipoisson" = FALSE
+  )
+  
+  
+  ## Change the indicator variable to TRUE, for specification being run
+  
+  # trends 
+  # the condition makes sure that if a trend is removed because of perfect colinearity 
+  # (which occurs when long annual dynamics are specified), then the regression is not marked as featuring it. 
+  if(any(grepl("trend_lin", row.names(coef_df)))){
+    ind_var[,"s_trend"] <- s_trend
+  }
+  if(any(grepl("trend_loga", row.names(coef_df)))){
+    ind_var[,"s_trend_loga"] <- s_trend_loga
+  }
+  # end of pre-treatment period
+  ind_var[,paste0("preperiod_end_",preperiod_end)] <- TRUE
+  # farther lag and lead
+  if(rfs_lag == 4){ind_var[,"lag4"] <- TRUE}
+  if(rfs_lead == 4){ind_var[,"lead4"] <- TRUE}
+  
+  # FE
+  if(grepl("year", fe)){ind_var[,"year_FE"] <- TRUE}
+  # exposure measurement period
+  ind_var[,paste0("expo_measure_period_",expo_measure_period)] <- TRUE
+  # outlying exposure variation
+  ind_var[,"exclude_bad_expo_proxy"] <- exclude_bad_expo_proxy
+  # offset
+  ind_var[,offset] <- TRUE
+  
+  # clustering 
+  if(cluster_var1=="country"){ind_var[,cluster_var1] <- TRUE}
+  if(is.numeric(cluster_var1)){ind_var[,paste0("expo_",cluster_var1,"tiles")] <- TRUE}
+  # distribution 
+  ind_var[,distribution] <- TRUE
+  
+  
+  ### Bind together coeff, SE, and specification labels
+  spec_df <- cbind(data.frame(Estimate = unname(aggr_coef_df["Estimate"]), 
+                              SE = unname(aggr_coef_df["Std. Error"])), # the names do not matter, Est and SE are found with column indexes 1 and 2 resp. in schart. 
+                   ind_var)
+  
+  return(spec_df)
+}
+
+
+reg_stats_indvar_list <- list()
+i <- 1
+# run loops from the first elements of schart_labels to the last
+# run trend loops at the smallest level, i.e. closest one to each others, so they are next to each others on the chart, within each alternative spec. 
+
+for(PREEND in c(2002, 2003, 2004)){
+for(LAG in c(3,4)){
+for(LEAD in c(3,4)){
+if(!(LAG==4 & LEAD==4)){ # prevent proceeding to loop if too many dynamics, one will be dropped bc of perfect colinearity anyway
+for(FE in c("country", "country + year")){
+for(EXPPER in c("2001_2007", "2006_2007")){
+for(WOOTL in c(FALSE, TRUE)){
+for(OFFSET in c("population_kcapita_2007", "population_kcapita")){
+for(CLT in list("country", 50, 20, 10)){
+for(DISTR in c("poisson", "quasipoisson")){
+for(LOGTREND in c(FALSE, TRUE)){ # log trend first, to match order in Table 1. 
+for(LINTREND in c(FALSE, TRUE)){
+reg_stats_indvar_list[[i]] <- make_spec_chart_df(outcome_variable = "undernourished_kcapita",
+                                             preperiod_end = PREEND,
+                                             rfs_lag = LAG, 
+                                             rfs_lead = LEAD,
+                                             fe = FE,
+                                             expo_measure_period = EXPPER, 
+                                             exclude_bad_expo_proxy = WOOTL,
+                                             offset = OFFSET, 
+                                             cluster_var1 = CLT,
+                                             distribution = DISTR,
+                                             s_trend_loga = LOGTREND,
+                                             s_trend = LINTREND)
+i <- i + 1
+}}}}}}}}}}}}
+
+# convert to dataframe to be able to chart
+reg_stats_indvar <- bind_rows(reg_stats_indvar_list)
+
+scdf <- reg_stats_indvar
+# remove all those regressions that have both lag4 and lead4, as this is not compatible
+scdf <- scdf[!(reg_stats_indvar$lag4 & reg_stats_indvar$lead4),]
+
+# save it 
+if(sum(duplicated(reg_stats_indvar))==0 ){ # i.e. 50 currently & nrow(reg_stats_indvar)+1 == i
+  saveRDS(reg_stats_indvar, file.path(paste0("temp_data/reg_results/spec_chart_df_robustness",Sys.Date())))
+} else{print(paste0("SOMETHING WENT WRONG in spec_chart_df"))}
+
+
+scdf <- readRDS(file.path(paste0("temp_data/reg_results/spec_chart_df_robustness",Sys.Date())))
+
+# are there duplicated estimates (this is not expected) 
+scdf[duplicated(scdf[,c(1,2)]), ] 
+
+large <- scdf[scdf$Estimate>10,]
+summary(large$preperiod_end_2002)
+summary(large$lead4)
+summary(large$lag4)
+summary(large$year_FE)
+# so those very large estimates are driven by 2002 pre period only, without year FE ever, either lag4 or lead4, and whatever the other spec
+# there is probably a very large idiosynratic error involved in this case, that is not captured by year FE. 
+scdf <- scdf[!(scdf$preperiod_end_2002 & !(scdf$year_FE) & (scdf$lag4 | scdf$lead4)), ]
+  
+
+# Unsurprisingly, year-FE-less estimates are very wide (either positively or negatively)
+# remove them for clarity 
+scdf <- scdf[scdf$year_FE,]
+
+# further reduce rows for visibiity, by keeping only preferred trends spec 
+scdf <- scdf[scdf$s_trend & scdf$s_trend_loga,]
+
+#### Full as is -------------------------------------------------------------------
+scdf_sig_idx <- dplyr::transmute(scdf, is_sig = abs(Estimate) < 1.96*SE) %>% pull(is_sig) %>% which()
+schart(scdf, 
+       labels = schart_labels,
+       order="asis", # "increasing",# 
+       highlight=scdf_sig_idx, 
+       heights=c(1,1.5),
+       pch.dot=c(20,20,20,20), # it's necessary that a length 4 vector is given, for bottom panel to show highlighted models
+       ci=c(.95),
+       col.est=c("grey70", "red3"),
+       col.dot=c("grey70","grey95","grey95","red3"),
+       bg.dot=c("grey60","grey95","grey95","white"),
+       leftmargin = 12,
+       ylab = "Estimates",
+       lwd.est = 3,
+       lwd.symbol = 1, 
+       fonts=c(2,1), adj=c(1,1), cex=c(0.6,0.6)
+)
+
+
+#### COUNTERFACTUAL MAGNITUDE SIMULATIONS -----------------------------------------------------------
+
+# implied by coefficient, for undernourishment outcome and total commodity dependency 
+# The aim is to estimate the annually averaged count of undernourished people avoided globally
+magnitudes_list <- list()
+MDL <- 1
+set.seed(8888)
+for(EST_DATA_OBJ in est_data_obj_list){
+  
+  EST_OBJ <- EST_DATA_OBJ[[1]]
+  d_clean <- EST_DATA_OBJ[[2]]
+  
+  # coefficients and vcov matrix
+  beta <- EST_OBJ$coefficients
+  beta_cov <- vcov(EST_OBJ)
+  
+  # fitted values
+  nrow(d_clean) == length(EST_OBJ$fitted.values)
+  all(EST_OBJ$fitted.values == fitted(EST_OBJ))
+  
+  d_clean$fv <- EST_OBJ$fitted.values  
+  d_clean$lp <- EST_OBJ$linear.predictors
+  summary(d_clean$fv)
+  # summary(d_clean[,outcome_variable])
+  
+  
+  ##### MONTE CARLO SIMULATIONS ####
+  # 3 steps, repeated for each draw
+  # 1. Sum dynamic coefficients --> cumulative coefficients (common to all obs.)
+  # 2. Multiply these cumulative coefficients by the dependency exposure --> scaled effects (common within countries)
+  # 3. Insert these in the counterfactual formula (which features the fitted values, that are country-year specific)
+  
+  # Then, for each draw, we output different quantities: 
+  # - Country averages over time to see which countries were hit the worst
+  # - Annual sums over countries to see which years were the worst 
+  # - The annually averaged count of undernourished people avoided globally
+  # - The global and period avergae of the undernourishment prevalence  
+  
+  # collected here 
+  sim_outputs <- list(periodavg_i = NULL, 
+                      globalsum_t = NULL, 
+                      globalsum_periodavg = NULL)
+  
+  # In preparation for step 2, make a cross-section of the countries, with their time invariant dependency 
+  d_clean_cs <- d_clean[!duplicated(d_clean$country), c("country", "dependency_calorie_total")]
+  
+  # And for step 3, subset the unique identifiers of panel d_clean and the fitted values
+  # FOR THE YEARS POST TREATMENT! 
+  d_clean_base <- d_clean[d_clean$year>=2008 ,c("country", "year", "fv", "population_kcapita")]
+  
+  n <- 1000
+  # store in a single row the aggregated effect (of dependency_calorie_total, aggregated over treatment window)
+  rep_effects <- data.frame(matrix(ncol = n, nrow = 1)) 
+  
+  row.names(rep_effects) <- c("total")
+  
+  # mod_adj <- reg_res_main
+  # each column is one replication. Each row is one beta (coefficient). 
+  beta_draw <- t(MASS::mvrnorm(n, mu = beta, Sigma = beta_cov))
+  
+  for(draw in 1:n){
+    
+    beta <- beta_draw[,draw]
+    
+    # Step 1. Make cumulative coefficients
+    
+    annual_coeff_names <- grep(pattern = "dependency_calorie_total_X_statute_conv", names(coef(EST_OBJ)), value = TRUE)
+    
+    cum_beta <- beta[annual_coeff_names] %>% sum() # this is a scalar in the present case
+    
+    
+    # Step 2. Make scaled effects
+    
+    # important that the scaled effect df be "reinitialized" at each replication 
+    # the cross-section of exposure data does not change with every replication
+    scaled_effects_i <- d_clean_cs
+    scaled_effects_i$scaled_effects_i <- d_clean_cs[,"dependency_calorie_total"] * cum_beta
+    
+    
+    # Step 3. Make the country-year predicted factual - counterfactual difference 
+    ctfl_it <- left_join(d_clean_base, scaled_effects_i, by = "country")
+    
+    #  # NOTE THE MINUS SCALED EFFECTS: it represents the counterfactual scenarios of mandates 1bgal lower every year
+    # Also, the 1 - exp() reflects that we difference factual - counterfactual, and not the other way round (just a matter of interpretation eventually)
+    ctfl_it <- dplyr::mutate(ctfl_it, ctfl_diff = fv * (1 - exp(-scaled_effects_i))) # NOTE THE MINUS SCALED EFFECTS
+    
+    
+    # return outputs of interest
+    sim_outputs[["periodavg_i"]][[draw]] <- ddply(ctfl_it, "country", summarise, 
+                                                  kcapita_diff_periodavg = mean(ctfl_diff, na.rm = TRUE))
+    
+    sim_outputs[["globalsum_t"]][[draw]] <- ddply(ctfl_it, "year", summarise, 
+                                                  kcapita_diff_globalsum = sum(ctfl_diff, na.rm = TRUE), 
+                                                  annual_pop = sum(population_kcapita, na.rm = TRUE)) # this would be constant, if offset was pop in 2007
+    
+    # within each year, divide the global count of undernourished people by the total population that year, to get the annual global prevalence effect
+    sim_outputs[["globalsum_t"]][[draw]] <- dplyr::mutate(sim_outputs[["globalsum_t"]][[draw]], 
+                                                          preval_diff_globalsum = kcapita_diff_globalsum/annual_pop)
+    
+    # we do averages of already computed, annual global sums
+    sim_outputs[["globalsum_periodavg"]][[draw]] <- data.frame(kcapita_diff = mean(sim_outputs[["globalsum_t"]][[draw]][,"kcapita_diff_globalsum"], na.rm = TRUE), 
+                                                               preval_diff = mean(sim_outputs[["globalsum_t"]][[draw]][,"preval_diff_globalsum"], na.rm = TRUE))
+    
+  }
+  
+  sim_summary <- list()
+  
+  sim_summary[["periodavg_i"]] <- sim_outputs[["periodavg_i"]] %>% bind_rows() %>% ddply("country", summarise,
+                                                                                         est_kcapita_diff_periodavg = mean(kcapita_diff_periodavg, na.rm = T),
+                                                                                         se_kcapita_diff_periodavg = sd(kcapita_diff_periodavg, na.rm = T))
+  
+  sim_summary[["globalsum_t"]] <- sim_outputs[["globalsum_t"]] %>% bind_rows() %>% ddply("year", summarise,
+                                                                                         est_kcapita_diff_globalsum = mean(kcapita_diff_globalsum, na.rm = T),
+                                                                                         se_kcapita_diff_globalsum = sd(kcapita_diff_globalsum, na.rm = T), 
+                                                                                         est_preval_diff_globalsum = mean(preval_diff_globalsum, na.rm = T),
+                                                                                         se_preval_diff_globalsum = sd(preval_diff_globalsum, na.rm = T))
+  
+  sim_summary[["globalsum_periodavg"]] <- sim_outputs[["globalsum_periodavg"]] %>% bind_rows() %>% summarise( 
+    est_kcapita_diff_gspa = mean(kcapita_diff, na.rm = TRUE), 
+    se_kcapita_diff_gspa = sd(kcapita_diff, na.rm = TRUE), 
+    est_preval_diff_gspa = mean(preval_diff, na.rm = TRUE), 
+    se_preval_diff_gspa = sd(preval_diff, na.rm = TRUE))
+  
+  # ON EN EST LAAAAAAAAAAA
+  # effects_stats <- dplyr::mutate(effects_stats, ci95lb = (avg - qt(0.975, df = n-1)*std_dev/sqrt(n)))
+  # effects_stats <- dplyr::mutate(effects_stats, ci95hb = (avg + qt(0.975, df = n-1)*std_dev/sqrt(n)))
+  # 
+  # row.names(effects_stats) <- row.names(rep_effects)
+  # 
+  # # return 
+  # effects_list[[CNT]][["crop_effects"]] <- crop_effects
+  # effects_list[[CNT]][["total_effect"]] <- total_effect
+  
+  # Print figures features in the text: 
+  trend_names <- c("dependency_calorie_total_trend_lin", "dependency_calorie_total_trend_loga")
+  coef_names <- names(beta)
+  
+  if(!any(grepl("trend_lin", coef_names)) & !any(grepl("trend_loga", coef_names)) ){
+    print(paste0("Not controlling for exposure trends: ", 
+                 round(sim_summary[["globalsum_periodavg"]]$est_kcapita_diff_gspa, 0), 
+                 " (+/- ", round(sim_summary[["globalsum_periodavg"]]$se_kcapita_diff_gspa, 0), ") thousand people"))
+  }
+  if(any(grepl("trend_lin", coef_names)) & !any(grepl("trend_loga", coef_names)) ){
+    print(paste0("Controlling for exposure level, linear trends: ", 
+                 round(sim_summary[["globalsum_periodavg"]]$est_kcapita_diff_gspa, 0), 
+                 " (+/- ", round(sim_summary[["globalsum_periodavg"]]$se_kcapita_diff_gspa, 0), ") thousand people"))
+  }
+  if(!any(grepl("trend_lin", coef_names)) & any(grepl("trend_loga", coef_names)) ){
+    print(paste0("Controlling for exposure level, logarithmic trends: ", 
+                 round(sim_summary[["globalsum_periodavg"]]$est_kcapita_diff_gspa, 0), 
+                 " (+/- ", round(sim_summary[["globalsum_periodavg"]]$se_kcapita_diff_gspa, 0), ") thousand people"))
+  }
+  if(any(grepl("trend_lin", coef_names)) & any(grepl("trend_loga", coef_names)) ){
+    print(paste0("Controlling for exposure level, linear and logarithmic trends: ", 
+                 round(sim_summary[["globalsum_periodavg"]]$est_kcapita_diff_gspa, 0), 
+                 " (+/- ", round(sim_summary[["globalsum_periodavg"]]$se_kcapita_diff_gspa, 0), ") thousand people"))
+  }
+    
+    
+  
+  magnitudes_list[[MDL]] <- sim_summary
+  MDL <- MDL + 1
+}
+print("The # of undernourished people that could have been avoided annually, over the hundred countries in the sample, had the mandates been 1bgal lower than what they actually were, every year :") 
+
+
+magnitudes_list[[1]]
+
+saveRDS(magnitudes_list, here("temp_data", "reg_results", "magnitudes_list.Rdata"))
+
+
+
+
+#### EXPLORATORY ANALYSIS  -----------------------------------------------------------------------------
 schart_labels <- list(
   "Including 2000-2004 pre-RFS period" = c(""),
   
@@ -1735,10 +2015,10 @@ make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
                                weights = FALSE,
                                start_year = 2009,
                                end_year = 2020, 
-                               include_preperiod = TRUE, 
+                               preperiod_end = 2004, 
                                # exposure 
                                gdp_weighting = TRUE,
-                               pretreat_period = "2001_2007", 
+                               expo_measure_period = "2001_2007", 
                                # dynamics 
                                rfs_lead = 0,
                                rfs_lag = 0,
@@ -1761,9 +2041,9 @@ make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
                                  weights = weights,
                                  start_year = start_year, 
                                  end_year = end_year, 
-                                 include_preperiod = include_preperiod, 
+                                 preperiod_end = preperiod_end, 
                                  gdp_weighting = gdp_weighting,
-                                 pretreat_period = pretreat_period, 
+                                 expo_measure_period = expo_measure_period, 
                                  rfs_lead = rfs_lead, 
                                  rfs_lag = rfs_lag, 
                                  rfs_fya = rfs_fya,
@@ -1789,14 +2069,13 @@ make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
   # /!\ THE ORDER HERE MATTERS ! IT MUST MATCH THE ORDER IN schart_labels   BELOW
   ind_var <- data.frame(
     # include pre-treatment period observations (2000-2004)
-    "include_preperiod" = FALSE,
-    
+
     # "gdp_weighting" = FALSE,
     
     # pre-treament period for dependency measurement
-    "preperiod_2001_2007" = FALSE,
-    "preperiod_2004_2007" = FALSE,
-    "preperiod_2006_2007" = FALSE,
+    "expo_measure_period_2001_2007" = FALSE,
+    "expo_measure_period_2004_2007" = FALSE,
+    "expo_measure_period_2006_2007" = FALSE,
     
     # offset type
     # "population_kcapita_2007" = FALSE,
@@ -1831,14 +2110,11 @@ make_spec_chart_df <- function(outcome_variable = "undernourished_kcapita",
   
   ## Change the indicator variable to TRUE, for specification being run
   
-  # pretreat period observations included
-  ind_var[,"include_preperiod"] <- include_preperiod
-  
   # GDP weighting
   # ind_var[,"gdp_weighting"] <- gdp_weighting
 
   # pretreat period for dependency
-  ind_var[,paste0("preperiod_",pretreat_period)] <- TRUE
+  ind_var[,paste0("expo_measure_period_",expo_measure_period)] <- TRUE
   
   # ind_var[,offset] <- TRUE
 
@@ -1910,9 +2186,9 @@ for(PREOBS in c(FALSE, TRUE)){
                     for(LEAD in 0:3){
                       reg_stats_indvar_list[[i]] <- make_spec_chart_df(outcome_variable = "undernourished_kcapita",
                                                                        weights = TRUE,
-                                                                       include_preperiod = PREOBS,
+                                                                       preperiod_end = PREOBS,
                                                                        # gdp_weighting = GDPW,
-                                                                       pretreat_period = PREPER, 
+                                                                       expo_measure_period = PREPER, 
                                                                        #offset = OFFSET, 
                                                                        rfs_lag = LAG, 
                                                                        rfs_lead = LEAD,
@@ -1929,8 +2205,8 @@ for(PREOBS in c(FALSE, TRUE)){
                   # LAG <- 0
                   # LEAD <- 0
                   # reg_stats_indvar_list[[i]] <- make_spec_chart_df(outcome_variable = "undernourished_kcapita",
-                  #                                                include_preperiod = PREOBS,
-                  #                                                pretreat_period = PREPER, 
+                  #                                                preperiod_end = PREOBS,
+                  #                                                expo_measure_period = PREPER, 
                   #                                                offset = OFFSET, 
                   #                                                rfs_lag = LAG, 
                   #                                                rfs_lead = LEAD,
@@ -1996,9 +2272,9 @@ schart(scdf,
 )
 
 #### Focusing on dynamics ----------------------------------------------------------
-scdf1 <- dplyr::filter(scdf, preperiod_2001_2007) # , population_kcapita
+scdf1 <- dplyr::filter(scdf, expo_measure_period_2001_2007) # , population_kcapita
 # Lighten labels in bottom panel 
-scdf1 <- dplyr::select(scdf1, -preperiod_2001_2007, -preperiod_2004_2007, -preperiod_2006_2007) #, -population_kcapita, -population_kcapita_2007
+scdf1 <- dplyr::select(scdf1, -expo_measure_period_2001_2007, -expo_measure_period_2004_2007, -expo_measure_period_2006_2007) #, -population_kcapita, -population_kcapita_2007
 schart_labels1 <- schart_labels[!(names(schart_labels) %in% c("Exposure period:", "Relative to population:"))]
 
 ##### Without pre-treatment period ---------------------------------------------
