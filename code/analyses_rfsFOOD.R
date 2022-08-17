@@ -606,12 +606,7 @@ lag_controls = NULL
 aggr_dyn = TRUE 
 
 # heterogeneity control
-pre_trend = TRUE 
-post_trend = TRUE
-overall_trend = FALSE
 s_trend = TRUE
-s_trend_sqrt = FALSE
-s_trend_sq = FALSE
 s_trend_log = FALSE
 fe = "country + year" #  
 control_remaining_dependency = TRUE
@@ -666,12 +661,7 @@ make_main_reg <- function(# outcome
                           aggr_dyn = TRUE, # whether to report aggregate coefficients of all leads and lags ("all") or leads and lags separately ("leadlag"), or no aggregate (any other string)
                           
                           # heterogeneity control
-                          pre_trend = TRUE, 
-                          post_trend = TRUE,
-                          overall_trend = FALSE,
-                          s_trend = TRUE,
-                          s_trend_sqrt = FALSE,
-                          s_trend_sq = FALSE,
+                          s_trend = FALSE,
                           s_trend_log = FALSE,
                           fe = "country + year", 
                           control_remaining_dependency = TRUE,  
@@ -782,12 +772,6 @@ make_main_reg <- function(# outcome
   if(grepl("foodinsecu_", outcome_variable)){
     calorie_only <- FALSE
     if(commodities == "total"){commodities <- TRUE}
-  }
-  
-  # we can't have both overall trends and pre or post trends
-  if(overall_trend){ 
-    pre_trend <- FALSE
-    post_trend <- FALSE
   }
   
   
@@ -909,156 +893,36 @@ make_main_reg <- function(# outcome
   
   ### Trends & FE #### 
   for(exp_set_name in names(exposures_sets)){
-    
-    # it's important that this is renewed for every regression (exposures_sets loop)
-    pre_trends_lin <- c()
-    pre_trends_log <- c() 
-    post_trends_lin <- c()
-    post_trends_log <- c()
-    overall_trends_lin <- c()
-    overall_trends_log <- c() 
-    
     # single set of exposures 
     exp_set <- exposures_sets[[exp_set_name]]
     
-    if(pre_trend){
-      d <- dplyr::mutate(d, pre_trend_dummy = (year<=preperiod_end))
-
-      if(s_trend){
-        for(exp_ in exp_set){
-          pre_trend_name <- paste0(exp_,"_pretrend_lin")
-          
-          pre_trends_lin <- c(pre_trends_lin, pre_trend_name)
-          
-          d <- mutate(d, !!as.symbol(pre_trend_name) := !!as.symbol(exp_) * (year) * pre_trend_dummy) 
-        }  
-        fml_lintrends_part <- paste0(pre_trends_lin, collapse = " + ")
-        # add them to the regressors part of the formula, within each regression set 
-        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_lintrends_part)
-      }
-      
-      
-      if(s_trend_log){
-        for(exp_ in exp_set){
-          pre_trend_name <- paste0(exp_, "_pretrend_log")
-          pre_trends_log <- c(pre_trends_log, pre_trend_name)
-          
-          # make the logged value start from 1 for the first year in the data - which is not the same depending on whether we include the pre-treatment period
-          d <- mutate(d, !!as.symbol(pre_trend_name) := !!as.symbol(exp_) * log(year - min(year) + 1) * pre_trend_dummy)
-          
-        }  
-        fml_logtrends_part <- paste0(pre_trends_log, collapse = " + ")
-        # add them to the regressors part of the formula, within each regression set 
-        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_logtrends_part)
-      }
-      
-    } 
-    
-    if(post_trend){
-      d <- dplyr::mutate(d, post_trend_dummy = (year>=start_year))
-      
-      if(s_trend){
-        for(exp_ in exp_set){
-          post_trend_name <- paste0(exp_,"_posttrend_lin")
-          
-          post_trends_lin <- c(post_trends_lin, post_trend_name)
-          
-          d <- mutate(d, !!as.symbol(post_trend_name) := !!as.symbol(exp_) * (year) * post_trend_dummy) 
-        }  
-        fml_lintrends_part <- paste0(post_trends_lin, collapse = " + ")
-        # add them to the regressors part of the formula, within each regression set 
-        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_lintrends_part)
-      }
-      
-      
-      if(s_trend_log){
-        for(exp_ in exp_set){
-          post_trend_name <- paste0(exp_, "_posttrend_log")
-          post_trends_log <- c(post_trends_log, post_trend_name)
-          
-          d <- mutate(d, !!as.symbol(post_trend_name) := !!as.symbol(exp_) * log(year - min(year) + 1) * post_trend_dummy )
-          
-        }  
-        fml_logtrends_part <- paste0(post_trends_log, collapse = " + ")
-        # add them to the regressors part of the formula, within each regression set 
-        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_logtrends_part)
-      }
-      
-    } 
-    
-    if(overall_trend){
-      if(s_trend){
-        for(exp_ in exp_set){
-          overall_trend_name <- paste0(exp_,"_overalltrend_lin")
-          
-          overall_trends_lin <- c(overall_trends_lin, overall_trend_name)
-          
-          d <- mutate(d, !!as.symbol(overall_trend_name) := !!as.symbol(exp_) * (year)) 
-        }  
-        fml_lintrends_part <- paste0(overall_trends_lin, collapse = " + ")
-        # add them to the regressors part of the formula, within each regression set 
-        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_lintrends_part)
-      }
-      
-      
-      if(s_trend_log){
-        for(exp_ in exp_set){
-          overall_trend_name <- paste0(exp_, "_overalltrend_log")
-          overall_trends_log <- c(overall_trends_log, overall_trend_name)
-          
-          # make the logged value start from 1 for the first year POST TREATMENT, notice the difference with log trend in pre_trend above
-          d <- mutate(d, !!as.symbol(overall_trend_name) := !!as.symbol(exp_) * log(year - min(year) + 1))
-          
-        }  
-        fml_logtrends_part <- paste0(overall_trends_log, collapse = " + ")
-        # add them to the regressors part of the formula, within each regression set 
-        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_logtrends_part)
-      }
-
-    } 
-
-    if(s_trend_sqrt){
-      for(exp_ in exp_set){
-        trendname <- paste0(exp_, "_trend_sqrt")
-        sqrt_trends <- c(sqrt_trends, trendname)
-
-        # make the logged value start from 1 for the first year in the data - which is not the same depending on whether we include the pre-treatment period
-        d <- mutate(d, !!as.symbol(trendname) := !!as.symbol(exp_) * sqrt((year - min(year))))
-
-      }
-      fml_sqrttrends_part <- paste0(sqrt_trends, collapse = " + ")
-      # add them to the regressors part of the formula, within each regression set
-      regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_sqrttrends_part)
-    }
-
-    if(s_trend_sq){
-      for(exp_ in exp_set){
-        trendname <- paste0(exp_, "_trend_sq")
-        sq_trends <- c(sq_trends, trendname)
-
-        # make the logged value start from 1 for the first year in the data - which is not the same depending on whether we include the pre-treatment period
-        d <- mutate(d, !!as.symbol(trendname) := !!as.symbol(exp_) * ((year - min(year))^2))
-
-      }
-      fml_sqtrends_part <- paste0(sq_trends, collapse = " + ")
-      # add them to the regressors part of the formula, within each regression set
-      regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " + ", fml_sqtrends_part)
-    }
-    
-
-    potential_controls <- unique(c(potential_controls, 
-                                   pre_trends_lin, pre_trends_log, 
-                                   post_trends_lin, post_trends_log, 
-                                   overall_trends_lin, overall_trends_log))
-    
     ## FIXED EFFECTS
-    # simply add them at the end
     regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, " | ", fe) 
+    
+    # VARYING SLOPES
+    # We specify heterogeneous trends using fixest. 
+    # as inspired by the answer from Laurent Bergé here https://stackoverflow.com/questions/34232834/fixed-effects-regression-with-state-specific-trends
+    # and by the vignettes https://cran.r-project.org/web/packages/fixest/vignettes/fixest_walkthrough.html#41_Interactions_involving_fixed-effects
+    # and documentation of fixest https://lrberge.github.io/fixest/reference/feglm.html#varying-slopes-1
+    # the point is: we want to allow the year variable to have a different slope (coefficient) for every level of exposure variable
+    
+    if(s_trend){
+      for(exp_ in exp_set){
+        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, paste0(" + ",exp_,"[[year]]")) 
+      }
+    }
+    if(s_trend_log){
+      d <- dplyr::mutate(d, year_ln = log(year - min(year) + 1))
+      potential_controls <- c(potential_controls, "year_ln")
+      for(exp_ in exp_set){
+        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, paste0(" + ",exp_,"[[year_ln]]")) 
+      }
+    }
+  
     
     ## FORMULA 
     # make it an actual formula obect
     regression_sets[[exp_set_name]]$formula <- as.formula(paste0(outcome_variable, " ~ ", regression_sets[[exp_set_name]]$formula))
-    
     
   }
   
@@ -1148,7 +1012,7 @@ make_main_reg <- function(# outcome
     d_clean <- dplyr::mutate(d_clean, !!as.symbol(outcome_variable) := asinh(!!as.symbol(outcome_variable)))
   }
   
-  if((distribution == "gaussian") & !invhypsin & !grepl("_preval", outcome_variable)){
+  if((distribution == "gaussian") & !invhypsin){#  & !grepl("_preval", outcome_variable) actually preval should get logged too, so that the gaussian model coefficients are on the same scale as the poisson's 
     d_clean <- dplyr::mutate(d_clean, !!as.symbol(outcome_variable) := log(!!as.symbol(outcome_variable)))
   }
   
@@ -1189,7 +1053,7 @@ make_main_reg <- function(# outcome
   
   # run regressions for each formula 
   for(exp_set_name in names(exposures_sets)){
-    
+  
     reg_res <- fixest::feglm(fml = regression_sets[[exp_set_name]]$formula,
                              offset = d_clean$log_offset,
                              weights = pop_w,
@@ -1306,7 +1170,7 @@ expdec <- d_clean_out[[2]]
 
 # just redo prevalence, as this is what we want to aggregate over countries, but it's not in the data because not used per se in regression
 # expdec <- dplyr::mutate(expdec, undernourished_kcapita = undernourished_kcapita / population_kcapita)
-expdec <- dplyr::filter(expdec, year <= 2004 | year >= 2011)
+# expdec <- dplyr::filter(expdec, year <= 2004 | year >= 2011)
 
 # demean, using convenient fixest fnct
 expdec$undernourished_kcapita_dm <- fixest::demean(X = as.formula("undernourished_kcapita ~ country + year"), data = expdec, as.matrix = TRUE) %>% unname()
@@ -1362,22 +1226,26 @@ d_clean_out %>% dplyr::filter(year == 2011) %>% dplyr::select(population_kcapita
 
 est_data_obj_list <- list()
 i <- 1
+# for(LOGTREND in c(FALSE, TRUE)){
 for(LINTREND in c(FALSE, TRUE)){
-  #for(SQRTTREND in c(FALSE, TRUE)){
-  for(LOGTREND in c(FALSE, TRUE)){
-    est_data_obj_list[[i]] <- make_main_reg(outcome_variable = "undernourished_kcapita", 
-                                      preperiod_end = 2004, 
-                                      rfs_lead = 3, 
-                                      rfs_lag = 3, 
-                                      s_trend = LINTREND, 
-                                      #s_trend_sq = SQRTTREND,
-                                      s_trend_log = LOGTREND,
-                                      output = "everything"
-                                      )
-    
-    i <- i + 1
-  #}
+# do not feature logarithmic-trend-only regression, it is weird, but is just here because of the loop code 
+# if( !(LOGTREND & !LINTREND) ){
+  for(LAG in c(3,4)){
+    for(LEAD in c(3,4)){
+      if(!(LAG==4 & LEAD==4)){ # prevent proceeding to loop if too many dynamics, one will be dropped bc of perfect colinearity anyway
+        est_data_obj_list[[i]] <- make_main_reg(outcome_variable = "undernourished_kcapita", 
+                                          preperiod_end = 2004, 
+                                          rfs_lead = LEAD, 
+                                          rfs_lag = LAG, 
+                                          s_trend = LINTREND, 
+                                          output = "everything")
+
+        i <- i + 1
+      }
+    }
   }
+#   }
+# }
 }
 
 # extract aggregated effects, in the coef table put in 3rd position in the list
@@ -1387,12 +1255,24 @@ coef_table_list <- lapply(est_data_obj_list, FUN = function(x){coef_df <- x[[3]]
                                                                paste0(est," \n (",SE,")")})
 
 
-
 # each element of est_obj_list is a list with the fixest object in the first element, and the data d_clean in the second
 # extract a list of estimation objects only 
-est_obj_list <- lapply(est_data_obj_list, FUN = function(x){x[[1]]})
+# and rename some stuff within it
+est_obj_list <- lapply(est_data_obj_list, 
+                       FUN = function(x){est_obj <- x[[1]]
+                       # these changes are enough for etable to pick the right names for varying slopes (which does not leverage dict)
+                       if(length(est_obj$fixef_terms)>0){
+                          est_obj$fixef_terms[est_obj$fixef_terms == "dependency_calorie_total[[year]]"] <- "$D_{i}$[[$t$]]"
+                          est_obj$fixef_terms[est_obj$fixef_terms == "dependency_calorie_total[[year_ln]]"] <- "$D_{i}$[[$\\log(year)$]]"
+                          # est_obj$fixef_vars[est_obj$fixef_vars == "year"] <- "$t$"
+                          # est_obj$fixef_vars[est_obj$fixef_vars == "dependency_calorie_total"] <- "$D_{i}$"
+                          # est_obj$fml_all$fixef <- as.formula("~country + t")
+                       }
+                       return(est_obj)  })
+
 
 fixest_dict=c(undernourished_kcapita = "# people undernourished \n offset by total population",
+              undernourished_preval = "Undernourishment prevalence",
                dependency_calorie_total_X_statute_conv = "$\\hat{\\beta}^{0}$",
                dependency_calorie_total_X_statute_conv_lead1 = "$\\hat{\\beta}^{1}$",
                dependency_calorie_total_X_statute_conv_lead2 = "$\\hat{\\beta}^{2}$",
@@ -1406,7 +1286,6 @@ fixest_dict=c(undernourished_kcapita = "# people undernourished \n offset by tot
               dependency_calorie_total_trend_log = "$\\hat{\\theta}$"
               )
 
-
 etable(est_obj_list, 
        tex = TRUE,
        title = "Dynamic coefficients of quasi-poisson regressions",
@@ -1417,7 +1296,7 @@ etable(est_obj_list,
        style.tex = style.tex(var.title = "\\midrule \\emph{Coefficients}"), # for some reason I need to add back the black line between headers and coefficients part
        headers = list("Dep. var." = list("# people undernourished \n (offset by total population)" = length(est_obj_list)),
                       "_Full effects:" = list(coef_table_list)), # the underscore places this head below the model header
-       order =  c("-3", "-2", "-1", "{0}", "{1}", "{2}", "{3}"),
+       order =  c("-4", "-3", "-2", "-1", "{0}", "{1}", "{2}", "{3}", "{4}"),
        # extralines = list("^^Calorific import dependency $*$ \n RFS2 mandates in year:" = rep(" ", length(est_obj_list))),
        digits = 3,
        signif.code = NA,
@@ -1425,6 +1304,84 @@ etable(est_obj_list,
        # file = here("temp_data", "reg_results", "table1"), 
        # replace = TRUE
        placement = "H")
+
+
+#### TABLE 1' - Gaussian REGRESSION --------------------------------------------------------------
+
+est_data_obj_list <- list()
+i <- 1
+# for(LOGTREND in c(FALSE, TRUE)){
+for(LINTREND in c(FALSE, TRUE)){
+  # do not feature logarithmic-trend-only regression, it is weird, but is just here because of the loop code 
+  # if( !(LOGTREND & !LINTREND) ){
+    for(LAG in c(3,4)){
+      for(LEAD in c(3,4)){
+        if(!(LAG==4 & LEAD==4)){ # prevent proceeding to loop if too many dynamics, one will be dropped bc of perfect colinearity anyway
+          est_data_obj_list[[i]] <- make_main_reg(outcome_variable = "undernourished_preval", 
+                                                  weights = TRUE,
+                                                  distribution = "gaussian",
+                                                  preperiod_end = 2004, 
+                                                  rfs_lead = LEAD, 
+                                                  rfs_lag = LAG, 
+                                                  s_trend = LINTREND, 
+                                                  output = "everything"
+          )
+          
+          i <- i + 1
+        }
+      }
+    }
+#   }
+# }
+}
+
+# extract aggregated effects, in the coef table put in 3rd position in the list
+coef_table_list <- lapply(est_data_obj_list, FUN = function(x){coef_df <- x[[3]][["total"]][["df_res"]]
+est <- coef_df[grepl("_aggrall", row.names(coef_df)), "Estimate"]%>%formatC(format = "f", digits = 3)
+SE <- coef_df[grepl("_aggrall", row.names(coef_df)), "Std. Error"]%>%formatC(format = "f", digits = 3)
+paste0(est," \n (",SE,")")})
+
+
+
+# each element of est_obj_list is a list with the fixest object in the first element, and the data d_clean in the second
+# extract a list of estimation objects only 
+# and rename some stuff within it
+est_obj_list <- lapply(est_data_obj_list, 
+                       FUN = function(x){est_obj <- x[[1]]
+                       # these changes are enough for etable to pick the right names for varying slopes (which does not leverage dict)
+                       if(length(est_obj$fixef_terms)>0){
+                         est_obj$fixef_terms[est_obj$fixef_terms == "dependency_calorie_total[[year]]"] <- "$D_{i}$[[$t$]]"
+                         est_obj$fixef_terms[est_obj$fixef_terms == "dependency_calorie_total[[year_ln]]"] <- "$D_{i}$[[$\\log(year)$]]"
+                         # est_obj$fixef_vars[est_obj$fixef_vars == "year"] <- "$t$"
+                         # est_obj$fixef_vars[est_obj$fixef_vars == "dependency_calorie_total"] <- "$D_{i}$"
+                         # est_obj$fml_all$fixef <- as.formula("~country + t")
+                       }
+                       return(est_obj)  })
+
+
+# each element of est_obj_list is a list with the fixest object in the first element, and the data d_clean in the second
+# extract a list of estimation objects only 
+est_obj_list <- lapply(est_data_obj_list, FUN = function(x){x[[1]]})
+
+etable(est_obj_list, 
+       tex = TRUE,
+       title = "Dynamic coefficients of population-weighted gaussian regressions",
+       label = "table1",
+       # tabular = "X",
+       dict = fixest_dict,
+       depvar = FALSE,
+       style.tex = style.tex(var.title = "\\midrule \\emph{Coefficients}"), # for some reason I need to add back the black line between headers and coefficients part
+       headers = list("Dep. var." = list("Undernourishment prevalence" = length(est_obj_list)),
+                      "_Full effects:" = list(coef_table_list)), # the underscore places this head below the model header
+       order =  c("-4", "-3", "-2", "-1", "{0}", "{1}", "{2}", "{3}", "{4}"),
+       # extralines = list("^^Calorific import dependency $*$ \n RFS2 mandates in year:" = rep(" ", length(est_obj_list))),
+       digits = 3,
+       signif.code = NA,
+       tpt = TRUE,
+       # file = here("temp_data", "reg_results", "table1"), 
+       # replace = TRUE
+       placement = "H")
+
 
 
 #### ROBUSTNESS CHECKS ------------------------------------------------------------------------------
