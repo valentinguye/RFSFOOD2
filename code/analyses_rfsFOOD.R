@@ -16,8 +16,8 @@ neededPackages <- c("fixest", # for some reason, it's necessary that fixest is l
                     "raster", "rgdal", "sp", "sf", 
                     "knitr", "kableExtra",
                     "DataCombine", 
-                    "boot",  "sandwich",# "fwildclusterboot",
-                    "ggplot2", "dotwhisker", "leaflet", "htmltools", "viridis", "hrbrthemes")
+                    "car", "boot",  "sandwich",# "fwildclusterboot",
+                    "ggplot2", "dotwhisker", "leaflet", "htmltools", "viridis", "scales")
 # "pglm", "multiwayvcov", "clusterSEs", "alpaca", "clubSandwich",
 
 # Install them in their project-specific versions
@@ -60,6 +60,21 @@ dir.create(here("temp_data","reg_results"))
 
 ### GLOBAL CRS USED ### 
 mercator_world_crs <- "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs "
+
+# FIXEST ETABLE DICTIONARY
+fixest_dict=c(undernourished_kcapita = "# people undernourished \n offset by total population",
+              undernourished_preval = "Undernourishment prevalence",
+              dependency_calorie_total_X_statute_conv = "$D_i M^{t}$",
+              dependency_calorie_total_X_statute_conv_lead1 = "$D_i M^{t+1}$",
+              dependency_calorie_total_X_statute_conv_lead2 = "$D_i M^{t+2}$",
+              dependency_calorie_total_X_statute_conv_lead3 = "$D_i M^{t+3}$",
+              dependency_calorie_total_X_statute_conv_lead4 = "$D_i M^{t+4}$",
+              dependency_calorie_total_X_statute_conv_lag1 = "$D_i M^{t-1}$",
+              dependency_calorie_total_X_statute_conv_lag2 = "$D_i M^{t-2}$",
+              dependency_calorie_total_X_statute_conv_lag3 = "$D_i M^{t-3}$", 
+              dependency_calorie_total_X_statute_conv_lag4 = "$D_i M^{t-4}$", 
+              dependency_calorie_total_trend_lin = "$\\hat{\\tau}$", 
+              dependency_calorie_total_trend_log = "$\\hat{\\theta}$")
 
 ### OBJECTS USED IN RFS PROCESSES ###
 
@@ -584,6 +599,7 @@ offset = "population_kcapita"
 weights = FALSE
 preperiod_end = 2004
 exclude_bad_expo_proxy = FALSE # if TRUE, removes countries with an outlying absolute ratio of post-exposure/pre-exposure (>1.5*IQR)
+exclude_india_china = FALSE
 
 # exposure 
 expo_measure_period = "2001_2007" # names(exposures_list)
@@ -639,6 +655,7 @@ make_main_reg <- function(# outcome
                           preperiod_end = 2004, # after which year to stop assuming that RFS1 could not anticipated (i.e. until when to assume it could not be anticipated). This trims the data after this year, and until start_year. 
                           remove_wellnourished = TRUE, # removes countries which undernourishment prevalence is "<2.5%" every year of the study period (according to FAOSTAT)
                           exclude_bad_expo_proxy = FALSE, # if TRUE, removes countries with an outliing absolute ratio of post-exposure/pre-exposure (>1.5*IQR)
+                          exclude_india_china = FALSE,
                           weights = FALSE, # should population weights be used in the regression
                           
                           # exposure
@@ -908,7 +925,7 @@ make_main_reg <- function(# outcome
     
     if(s_trend){
       for(exp_ in exp_set){
-        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, paste0(" + ",exp_,"[[year]]")) 
+        regression_sets[[exp_set_name]]$formula <- paste0(regression_sets[[exp_set_name]]$formula, paste0(" + country[[year]]")) 
       }
     }
     if(s_trend_log){
@@ -964,6 +981,10 @@ make_main_reg <- function(# outcome
     
     d <- dplyr::filter(d, !(ratio %in% otl_values))
     
+  }
+  
+  if(exclude_india_china){
+    d <- dplyr::filter(d, !(country %in% c("India", "China, mainland")))
   }
   
   d_save <- d 
@@ -1157,79 +1178,22 @@ make_main_reg <- function(# outcome
   rm(toreturn)
 }
 
-#### FIGURE HETEROGENEOUS TRENDS --------------------------------------------------------
-# we just run the regression to extract the data used under the preferred specification
-d_clean_out <- make_main_reg(outcome_variable = "undernourished_kcapita", 
-                              preperiod_end = 2004, 
-                              rfs_lead = 3, 
-                              rfs_lag = 3, 
-                              output = "everything")
-
-d_clean_out[[1]]
-expdec <- d_clean_out[[2]] 
-
-# just redo prevalence, as this is what we want to aggregate over countries, but it's not in the data because not used per se in regression
-# expdec <- dplyr::mutate(expdec, undernourished_kcapita = undernourished_kcapita / population_kcapita)
-# expdec <- dplyr::filter(expdec, year <= 2004 | year >= 2011)
-
-# demean, using convenient fixest fnct
-expdec$undernourished_kcapita_dm <- fixest::demean(X = as.formula("undernourished_kcapita ~ country + year"), data = expdec, as.matrix = TRUE) %>% unname()
-
-
-# excluded_outcomes <- outcomes[outcomes$year %in% c(2005:2010),c("country", "year", "undernourished_kcapita", "population_kcapita")]
-# expdecfill <- how_to_join(expdec, excluded_outcomes, by = c("country"))
-
-# make a variable for quantiles of import dependency
-Q <- 10 # define quantile
-expdec <- mutate(expdec, exposure_Q = cut_number(dependency_calorie_total, n = Q, labels = paste0("exposure_Q", 1:Q)))
-# check that it worked out
-#quantile(expdec$dependency_calorie_total, seq(0, 1, 1/Q))
-#head(expdec[!duplicated(expdec$country),c("country", "year", "dependency_calorie_total", "exposure_Q")])
-
-yeardec <- ddply(expdec, c("year", "exposure_Q"), summarise, 
-                 undernourished_kcapita = mean(undernourished_kcapita), 
-                 undernourished_kcapita_dm = mean(undernourished_kcapita_dm))
-
-ggplot(yeardec, aes(x = year, y = undernourished_kcapita_dm, group = exposure_Q)) +
-  geom_line(aes( col = exposure_Q)) + # linetype=exposure_Q,
-  
-  # scale_linetype_manual(breaks=paste0("exposure_Q", 1:Q),
-  #                       values=c("solid", "dotted", "twodash", "longdash", "dotdash"),
-  #                       labels=c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")[1:Q],
-  #                       name="Calorific import \n dependency quintiles") +
-  scale_colour_brewer(breaks=paste0("exposure_Q", 1:Q), 
-                      palette = "Paired", 
-                      labels=c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")[1:Q], # needs to be repeated so that legend isn't doubled... 
-                      name="Calorific import \n dependency quintiles") +
-  
-  annotate("rect", xmin = 2004, xmax = 2011, 
-           ymin = min(yeardec$undernourished_kcapita_dm), 
-           ymax = max(yeardec$undernourished_kcapita_dm),
-           alpha = .3, col = "lightgrey") +
-  geom_label(aes(label="Years excluded from analysis",
-                 x=2007.5,
-                 y=max(undernourished_kcapita_dm)), alpha = 0.8, col = "black",) +
-  scale_x_continuous(breaks = c(2001, 2004, 2011, 2014, 2022)) +
-  scale_y_continuous(name = "Thousand undernourished people, country & year demeaned") + 
-  theme_minimal() +
-  theme(legend.position="right", 
-        plot.title = element_text(size = 10, face = "bold"), 
-        axis.title.y.left=element_text(size=10,face="bold", hjust = 1),
-        axis.title.y.right=element_text(size=10,face="bold", hjust = 1),
-        axis.title.x=element_blank(), #element_text(size=10,face="bold", hjust = 0.5), 
-        panel.grid = element_line(inherit.blank = TRUE))  
-
-# and extract number of people comprised in the sample in 2011
-d_clean_out %>% dplyr::filter(year == 2011) %>% dplyr::select(population_kcapita) %>% sum()
-
 #### TABLE 1 - REGRESSION --------------------------------------------------------------
 
 est_data_obj_list <- list()
 i <- 1
-# for(LOGTREND in c(FALSE, TRUE)){
+# for(LOGTREND in c(FALSE, TRUE)){ do not feature logarithmic-trend-only regression, it is weird, but is just here because of the loop code 
 for(LINTREND in c(FALSE, TRUE)){
-# do not feature logarithmic-trend-only regression, it is weird, but is just here because of the loop code 
-# if( !(LOGTREND & !LINTREND) ){
+  # make one regression for each trend type, with only 2 year long leads and lags
+  est_data_obj_list[[i]] <- make_main_reg(outcome_variable = "undernourished_kcapita", 
+                                          preperiod_end = 2004, 
+                                          rfs_lead = 2, 
+                                          rfs_lag = 2, 
+                                          s_trend = LINTREND, 
+                                          output = "everything")
+  
+  i <- i + 1
+  
   for(LAG in c(3,4)){
     for(LEAD in c(3,4)){
       if(!(LAG==4 & LEAD==4)){ # prevent proceeding to loop if too many dynamics, one will be dropped bc of perfect colinearity anyway
@@ -1244,9 +1208,8 @@ for(LINTREND in c(FALSE, TRUE)){
       }
     }
   }
-#   }
-# }
 }
+
 
 # extract aggregated effects, in the coef table put in 3rd position in the list
 coef_table_list <- lapply(est_data_obj_list, FUN = function(x){coef_df <- x[[3]][["total"]][["df_res"]]
@@ -1270,22 +1233,6 @@ est_obj_list <- lapply(est_data_obj_list,
                        }
                        return(est_obj)  })
 
-
-fixest_dict=c(undernourished_kcapita = "# people undernourished \n offset by total population",
-              undernourished_preval = "Undernourishment prevalence",
-               dependency_calorie_total_X_statute_conv = "$\\hat{\\beta}^{0}$",
-               dependency_calorie_total_X_statute_conv_lead1 = "$\\hat{\\beta}^{1}$",
-               dependency_calorie_total_X_statute_conv_lead2 = "$\\hat{\\beta}^{2}$",
-               dependency_calorie_total_X_statute_conv_lead3 = "$\\hat{\\beta}^{3}$",
-              dependency_calorie_total_X_statute_conv_lead4 = "$\\hat{\\beta}^{4}$",
-              dependency_calorie_total_X_statute_conv_lag1 = "$\\hat{\\beta}^{-1}$",
-               dependency_calorie_total_X_statute_conv_lag2 = "$\\hat{\\beta}^{-2}$",
-               dependency_calorie_total_X_statute_conv_lag3 = "$\\hat{\\beta}^{-3}$", 
-              dependency_calorie_total_X_statute_conv_lag4 = "$\\hat{\\beta}^{-4}$", 
-              dependency_calorie_total_trend_lin = "$\\hat{\\tau}$", 
-              dependency_calorie_total_trend_log = "$\\hat{\\theta}$"
-              )
-
 etable(est_obj_list, 
        tex = TRUE,
        title = "Dynamic coefficients of quasi-poisson regressions",
@@ -1293,10 +1240,10 @@ etable(est_obj_list,
        # tabular = "X",
        dict = fixest_dict,
        depvar = FALSE,
-       style.tex = style.tex(var.title = "\\midrule \\emph{Coefficients}"), # for some reason I need to add back the black line between headers and coefficients part
-       headers = list("Dep. var." = list("# people undernourished \n (offset by total population)" = length(est_obj_list)),
+       style.tex = style.tex(var.title = "\\midrule \\emph{Dynamic effects}"), # for some reason I need to add back the black line between headers and coefficients part
+       headers = list("Dep. var." = list("1000 people undernourished \n (offset by total population)" = length(est_obj_list)),
                       "_Full effects:" = list(coef_table_list)), # the underscore places this head below the model header
-       order =  c("-4", "-3", "-2", "-1", "{0}", "{1}", "{2}", "{3}", "{4}"),
+       order =  c("t-4", "t-3", "t-2", "t-1", "t}", "t+1", "t+2", "t+3", "t+4"),
        # extralines = list("^^Calorific import dependency $*$ \n RFS2 mandates in year:" = rep(" ", length(est_obj_list))),
        digits = 3,
        signif.code = NA,
@@ -1304,6 +1251,178 @@ etable(est_obj_list,
        # file = here("temp_data", "reg_results", "table1"), 
        # replace = TRUE
        placement = "H")
+
+
+#### FIGURE HETEROGENEOUS TRENDS --------------------------------------------------------
+# 6th regression is the one with a linear trend, and 3 leads and 3 lags
+est_obj_pref <- est_data_obj_list[[6]][[1]]
+expdec <- est_data_obj_list[[6]][[2]] 
+
+# if we remove India and China
+# expdec <- expdec[!(expdec$country %in% c("India","China, mainland")),]
+
+
+### PREPARE REMAINING VARIATION AFTER DEMEANING (ESTIMATED) FIXED EFFECTS AND DETRENDING (ESTIMATED) VARYING SLOPES
+
+# join the different fitted varying slopes and fixed effects
+fit_fe_i <- fixef(est_obj_pref)$country
+fit_fe_i <- data.frame("country" = names(fit_fe_i), fit_fe_i = fit_fe_i)
+tail(fit_fe_i)
+
+fit_fe_t <- fixef(est_obj_pref)$year
+fit_fe_t <- data.frame("year" = as.numeric(names(fit_fe_t)), fit_fe_t = fit_fe_t)
+tail(fit_fe_t)
+
+fit_vs <- fixef(est_obj_pref)$`country[[year]]`
+fit_vs <- data.frame("country" = names(fit_vs), fit_vs = fit_vs)
+tail(fit_vs)
+
+
+expdec <- left_join(expdec, fit_fe_i, by = "country")
+expdec <- left_join(expdec, fit_fe_t, by = "year")
+expdec <- left_join(expdec, fit_vs, by = "country")
+# check that the joins were made correctly
+expdec[,c("country", "year", "fit_fe_i", "fit_fe_t", "fit_vs")] %>%  arrange(country, year) %>% head() 
+
+# verify what sumFE comprises, and what fit_vs really is (estimated coefficients, or fitted trends i.e. estimated coeff times the values of the trends)
+summary(fixef(est_obj_pref, sorted = FALSE))
+# from this, Sudan in 2001 has a -32.19 country FE, a -2.111 year FE, and a 0.01623 varying slope (not expressed wrt the year)
+# so we scale the varying slopes by the years
+expdec <- dplyr::mutate(expdec, lin_fit_trends = fit_vs*year) # linear level fitted trends. Note that we don't multiply by exposure level, because the coefficients were estimated as varying by country, and not by esposure level. 
+expdec <- dplyr::mutate(expdec, own_sumFE = fit_fe_i + lin_fit_trends + fit_fe_t)
+
+# just redo prevalence, it's not in the data because not used per se in regression
+expdec <- dplyr::mutate(expdec, undernourished_preval = undernourished_kcapita / population_kcapita)
+
+# add fixest outputs
+expdec$y_fixest <- est_obj_pref$y
+expdec$fitted.values_fixest <- est_obj_pref$fitted.values
+expdec$residuals_fixest <- est_obj_pref$residuals
+expdec$linear.predictors_fixest <- est_obj_pref$linear.predictors
+expdec$sumFE_fixest <- est_obj_pref$sumFE
+# (and check with dep var that they are sorted in the same order)
+head(expdec[,c("country", "year", "undernourished_kcapita", "y_fixest", "own_sumFE", "sumFE_fixest", "fit_fe_i", "fit_fe_t", "lin_fit_trends", "fit_vs")], 20)
+# some from this, it's clear that sumFE_fixest is the sum fit_fe_i + lin_fit_trends + fit_fe_t
+# What we are interested in, is 
+expdec <- dplyr::mutate(expdec, 
+                        remain_kcapita_detrended = undernourished_kcapita*(1 - exp(sumFE_fixest)),
+                        remain_preval_detrended = undernourished_preval*(1 - exp(sumFE_fixest)) )
+
+# NON-DETRENDED REMAINING VARIATION 
+# UTILISER UNE ESTIMATION OU LES FIXED EFFECTS ONT ETE FITTED SANS TREND DE BASE 
+est_obj_pref2 <- est_data_obj_list[[2]][[1]]
+expdec2 <- est_data_obj_list[[2]][[2]] 
+# just redo prevalence, it's not in the data because not used per se in regression
+expdec2 <- dplyr::mutate(expdec2, undernourished_preval = undernourished_kcapita / population_kcapita)
+# add fixest outputs
+expdec2$fitted.values_fixest <- est_obj_pref2$fitted.values
+expdec2$sumFE_fixest <- est_obj_pref2$sumFE
+expdec2$residuals_fixest <- est_obj_pref2$residuals
+
+expdec2 <- dplyr::mutate(expdec2, 
+                         remain_kcapita_NONdetrended = undernourished_kcapita*(1 - exp(sumFE_fixest)),
+                         remain_preval_NONdetrended = undernourished_preval*(1 - exp(sumFE_fixest)) )
+
+# head(expdec2[,c("country", "year", "undernourished_kcapita", "sumFE_fixest", "remain_kcapita_NONdetrended")], 20)
+
+expdec <- left_join(expdec, expdec2[,c("country", "year", "remain_kcapita_NONdetrended", "remain_preval_NONdetrended")], by = c("country", "year"))
+
+
+# OLD CODE 
+# expdec <- dplyr::filter(expdec, year <= 2004 | year >= 2011)
+# demean, using convenient fixest fnct
+expdec$undernourished_kcapita_dm <- fixest::demean(X = as.formula("undernourished_kcapita ~ country + year"), data = expdec, as.matrix = TRUE) %>% unname()
+expdec$undernourished_preval_dm <- fixest::demean(X = as.formula("undernourished_preval ~ country + year"), data = expdec, as.matrix = TRUE) %>% unname()
+
+# make a variable for quantiles of import dependency
+Q <- 10 # define quantile
+expdec <- mutate(expdec, exposure_Q = cut_number(dependency_calorie_total, n = Q, labels = paste0("exposure_Q", 1:Q)))
+# check that it worked out
+#quantile(expdec$dependency_calorie_total, seq(0, 1, 1/Q))
+#head(expdec[!duplicated(expdec$country),c("country", "year", "dependency_calorie_total", "exposure_Q")])
+
+# inspect who is where 
+Q1 <- expdec[expdec$exposure_Q=="exposure_Q1" & expdec$year == 2001,c("country", "population_kcapita", "undernourished_preval", "undernourished_kcapita", "fitted.values_fixest", "remain_kcapita_detrended", "remain_preval_detrended", "remain_kcapita_NONdetrended", "remain_preval_NONdetrended", "dependency_calorie_total", "exposure_Q")]
+Q2 <- expdec[expdec$exposure_Q=="exposure_Q2" & expdec$year == 2001,c("country", "population_kcapita", "undernourished_preval", "undernourished_kcapita", "fitted.values_fixest", "remain_kcapita_detrended", "remain_preval_detrended", "remain_kcapita_NONdetrended", "remain_preval_NONdetrended", "dependency_calorie_total", "exposure_Q")]
+china <- expdec[expdec$country=="China, mainland",c("country", "year", "population_kcapita", "undernourished_preval", "undernourished_kcapita", "fitted.values_fixest", "remain_kcapita_detrended", "remain_preval_detrended", "remain_kcapita_NONdetrended", "remain_preval_NONdetrended", "dependency_calorie_total", "exposure_Q")]
+# it's clearly India and China that drive the different trends in Q1 and Q2 respectively
+Q1
+Q2
+china
+mean(Q2$undernourished_kcapita)
+
+
+yeardec <- ddply(expdec, c("year", "exposure_Q"), summarise, 
+                 undernourished_kcapita = mean(undernourished_kcapita),
+                 undernourished_preval = mean(undernourished_preval),
+                 remain_kcapita_detrended = mean(remain_kcapita_detrended), 
+                 remain_kcapita_NONdetrended = mean(remain_kcapita_NONdetrended),
+                 remain_preval_detrended = mean(remain_preval_detrended), 
+                 remain_preval_NONdetrended = mean(remain_preval_NONdetrended) )
+
+# Full effects, fitted WITHOUT country trends
+ggplot(yeardec, aes(x = year, y = remain_kcapita_NONdetrended, group = exposure_Q)) +
+  geom_line(aes(linetype=exposure_Q, col = exposure_Q)) + # 
+  
+  scale_linetype_manual(breaks=paste0("exposure_Q", 1:Q),
+                        values=c("solid", "dotted", "twodash", "longdash", "dotdash", "dashed", "solid", "dotted", "twodash", "longdash")[1:Q],
+                        labels=c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")[1:Q],
+                        name="Cross-country averages \n within exposure deciles") +
+  scale_colour_brewer(breaks=paste0("exposure_Q", 1:Q), 
+                      palette = "Paired", 
+                      labels=c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")[1:Q], # needs to be repeated so that legend isn't doubled... 
+                      name="Cross-country averages \n within exposure deciles") +
+  
+  annotate("rect", xmin = 2004, xmax = 2011, 
+           ymin = min(yeardec$remain_kcapita_NONdetrended), 
+           ymax = max(yeardec$remain_kcapita_NONdetrended),
+           alpha = .3, col = "lightgrey") +
+  geom_label(aes(label="Years excluded from analysis",
+                 x=2007.5,
+                 y=max(remain_kcapita_NONdetrended)), alpha = 0.8, col = "black",) +
+  scale_x_continuous(breaks = c(2001, 2004, 2011, 2014, 2022)) +
+  scale_y_continuous(name = "Undernourishment prevalence, country & year demeaned, BUT NOT detrended") + # (1000 undernourished ppl.)
+  theme_minimal() +
+  theme(legend.position="right", 
+        plot.title = element_text(size = 10, face = "bold"), 
+        axis.title.y.left=element_text(size=10,face="bold", hjust = 1),
+        axis.title.y.right=element_text(size=10,face="bold", hjust = 1),
+        axis.title.x=element_blank(), #element_text(size=10,face="bold", hjust = 0.5), 
+        panel.grid = element_line(inherit.blank = TRUE))  
+
+# Full effects, fitted WITH country trends
+ggplot(yeardec, aes(x = year, y = remain_kcapita_detrended, group = exposure_Q)) +
+  geom_line(aes(linetype=exposure_Q, col = exposure_Q)) + # 
+  
+  scale_linetype_manual(breaks=paste0("exposure_Q", 1:Q),
+                        values=c("solid", "dotted", "twodash", "longdash", "dotdash", "dashed", "solid", "dotted", "twodash", "longdash")[1:Q],
+                        labels=c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")[1:Q],
+                        name="Cross-country averages \n within exposure deciles") +
+  scale_colour_brewer(breaks=paste0("exposure_Q", 1:Q), 
+                      palette = "Paired", 
+                      labels=c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th")[1:Q], # needs to be repeated so that legend isn't doubled... 
+                      name="Cross-country averages \n within exposure deciles") +
+  
+  annotate("rect", xmin = 2004, xmax = 2011, 
+           ymin = min(yeardec$remain_kcapita_detrended), 
+           ymax = max(yeardec$remain_kcapita_detrended),
+           alpha = .3, col = "lightgrey") +
+  geom_label(aes(label="Years excluded from analysis",
+                 x=2007.5,
+                 y=max(remain_kcapita_detrended)), alpha = 0.8, col = "black",) +
+  scale_x_continuous(breaks = c(2001, 2004, 2011, 2014, 2022)) +
+  scale_y_continuous(name = "Undernourishment prevalence, country & year demeaned, AND detrended") + 
+  theme_minimal() +
+  theme(legend.position="right", 
+        plot.title = element_text(size = 10, face = "bold"), 
+        axis.title.y.left=element_text(size=10,face="bold", hjust = 1),
+        axis.title.y.right=element_text(size=10,face="bold", hjust = 1),
+        axis.title.x=element_blank(), #element_text(size=10,face="bold", hjust = 0.5), 
+        panel.grid = element_line(inherit.blank = TRUE))  
+
+# and extract number of people comprised in the sample in 2011
+d_clean_out %>% dplyr::filter(year == 2011) %>% dplyr::select(population_kcapita) %>% sum()
+
 
 
 #### TABLE 1' - Gaussian REGRESSION --------------------------------------------------------------
@@ -1318,7 +1437,7 @@ for(LINTREND in c(FALSE, TRUE)){
       for(LEAD in c(3,4)){
         if(!(LAG==4 & LEAD==4)){ # prevent proceeding to loop if too many dynamics, one will be dropped bc of perfect colinearity anyway
           est_data_obj_list[[i]] <- make_main_reg(outcome_variable = "undernourished_preval", 
-                                                  weights = TRUE,
+                                                  weights = FALSE,
                                                   distribution = "gaussian",
                                                   preperiod_end = 2004, 
                                                   rfs_lead = LEAD, 
