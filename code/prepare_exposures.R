@@ -18,8 +18,8 @@ neededPackages <- c("fixest", # for some reason, it's necessary that fixest is l
                     "raster", "rgdal", "sp", "sf", 
                     "knitr", "kableExtra",
                     "DataCombine", 
-                    "boot",  "sandwich",# "fwildclusterboot",
-                    "ggplot2", "dotwhisker", "leaflet", "htmltools", "viridis", "hrbrthemes")
+                    "car", "boot",  "sandwich",# "fwildclusterboot",
+                    "ggplot2", "dotwhisker", "leaflet", "htmltools", "viridis", "scales")
 # Install them in their project-specific versions
 renv::restore(packages = neededPackages)
 
@@ -832,14 +832,23 @@ for(item in all_items[selected_items]){
                                        pfb[, paste0("gross_supply_ktonnes_",item)]
 }
 
+## Inverse of GDP 
+pfb <- dplyr::mutate(pfb, inv_gdp_pc_cstusd = 1/gdp_pc_cstusd)
+
+# dependency variables 
+all_dep_vars <- grep("dependency_", names(pfb), value = TRUE)
+
+# For all dependency variables, make an inverse gdp per capita weighted version 
+# express GDP per capita in 1000 USD, to make resulting quantities less small 
+pfb <- dplyr::mutate(pfb, across(.cols = any_of(all_dep_vars), .fns = ~.*1000*inv_gdp_pc_cstusd, .names = paste0("gdp_","{col}")))
+
 
 ### AVERAGE OVER YEARS 
 # We average over different sets of years, as it is not clear in advance what is the most appropriate period (there are trade-offs)
 pretreat_year_sets <- list(`2001_2007` = c(2001:2007), 
                             `2004_2007` = c(2004:2007),
                             `2006_2007` = c(2006:2007))
-# dependency variables 
-all_dep_vars <- grep("dependency_", names(pfb), value = TRUE)
+
 
 csfb <- list()
 for(pretreat_period in pretreat_year_sets){
@@ -849,11 +858,17 @@ for(pretreat_period in pretreat_year_sets){
                     
                                   # GDP per capita in 2015 constant USD 
                                   gdp_pc_cstusd = mean(gdp_pc_cstusd, na.rm = TRUE),
-                
+                                  inv_gdp_pc_cstusd = mean(inv_gdp_pc_cstusd, na.rm = TRUE),
+                        
                                   # Main dependency variables: 
                                   dependency_calorie_total = mean(dependency_calorie_total, na.rm = TRUE), 
                                   dependency_protein_total = mean(dependency_protein_total, na.rm = TRUE), 
                                   dependency_fat_total = mean(dependency_fat_total, na.rm = TRUE), 
+                                  # GDP-weighted main dependency
+                                  gdp_dependency_calorie_total = mean(gdp_dependency_calorie_total, na.rm = TRUE), 
+                                  gdp_dependency_protein_total = mean(gdp_dependency_protein_total, na.rm = TRUE), 
+                                  gdp_dependency_fat_total = mean(gdp_dependency_fat_total, na.rm = TRUE), 
+                
                                   # import, total: 
                                   import_kcal_total = mean(import_kcal_total, na.rm = TRUE), 
                                   import_gprot_total = mean(import_gprot_total, na.rm = TRUE), 
@@ -966,9 +981,7 @@ for(pretreat_period in pretreat_year_sets){
                                   !!as.symbol("gprot_per_kg_meat") := mean(!!as.symbol("gprot_per_kg_meat"), na.rm = TRUE), 
                                   !!as.symbol("gprot_per_kg_fish") := mean(!!as.symbol("gprot_per_kg_fish"), na.rm = TRUE) 
                                 )
-  # For all dependency variables, make an inverse gdp per capita weighted version 
-  # express GDP per capita in 1000 USD, to make resulting quantities less small 
-  csfb <- dplyr::mutate(csfb, across(.cols = any_of(all_dep_vars), .fns = ~.*1000/gdp_pc_cstusd, .names = paste0("gdp_","{col}")))
+
   
   saveRDS(csfb, file = here("temp_data", "exposures", paste0("dependency_",
                                                               min(pretreat_period),
